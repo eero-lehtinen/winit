@@ -199,6 +199,11 @@ impl Inner {
     #[inline]
     pub fn set_cursor_icon(&self, cursor: CursorIcon) {
         *self.previous_pointer.borrow_mut() = cursor.name().into();
+        if let Some(s) = backend::get_canvas_style_property(self.canvas.borrow().raw(), "cursor") {
+            if s == "none" {
+                return;
+            }
+        }
         backend::set_canvas_style_property(self.canvas.borrow().raw(), "cursor", cursor.name());
     }
 
@@ -221,8 +226,12 @@ impl Inner {
         let Some(pointer) = self.custom_pointers.borrow().get(&key).cloned() else {
             return;
         };
-
         *self.previous_pointer.borrow_mut() = pointer.clone();
+        if let Some(s) = backend::get_canvas_style_property(self.canvas.borrow().raw(), "cursor") {
+            if s == "none" {
+                return;
+            }
+        }
         backend::set_canvas_style_property(self.canvas.borrow().raw(), "cursor", &pointer);
     }
 
