@@ -1491,6 +1491,23 @@ impl UnownedWindow {
     }
 
     #[inline]
+    pub fn register_custom_cursor_icon(
+        &self,
+        key: u64,
+        png_bytes: Vec<u8>,
+        hot_x: u32,
+        hot_y: u32,
+    ) {
+        self.xconn
+            .register_custom_cursor_icon(key, png_bytes, hot_x, hot_y);
+    }
+
+    #[inline]
+    pub fn set_custom_cursor_icon(&self, key: u64) {
+        self.xconn.set_custom_cursor_icon(self.xwindow, key);
+    }
+
+    #[inline]
     pub fn set_cursor_grab(&self, mode: CursorGrabMode) -> Result<(), ExternalError> {
         let mut grabbed_lock = self.cursor_grabbed_mode.lock().unwrap();
         if mode == *grabbed_lock {

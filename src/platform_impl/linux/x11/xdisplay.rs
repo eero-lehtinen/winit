@@ -49,6 +49,7 @@ pub(crate) struct XConnection {
 
     pub latest_error: Mutex<Option<XError>>,
     pub cursor_cache: Mutex<HashMap<Option<CursorIcon>, ffi::Cursor>>,
+    pub custom_cursors: Mutex<HashMap<u64, ffi::Cursor>>,
 }
 
 unsafe impl Send for XConnection {}
@@ -117,6 +118,7 @@ impl XConnection {
             monitor_handles: Mutex::new(None),
             database,
             cursor_cache: Default::default(),
+            custom_cursors: Default::default(),
         })
     }
 

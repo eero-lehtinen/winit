@@ -1346,6 +1346,25 @@ impl Window {
             .maybe_queue_on_main(move |w| w.set_cursor_icon(cursor))
     }
 
+    #[inline]
+    pub fn register_custom_cursor_icon(
+        &self,
+        key: u64,
+        png_bytes: Vec<u8>,
+        hot_x: u32,
+        hot_y: u32,
+    ) {
+        self.window.maybe_queue_on_main(move |w| {
+            w.register_custom_cursor_icon(key, png_bytes, hot_x, hot_y)
+        })
+    }
+
+    #[inline]
+    pub fn set_custom_cursor_icon(&self, key: u64) {
+        self.window
+            .maybe_queue_on_main(move |w| w.set_custom_cursor_icon(key))
+    }
+
     /// Changes the position of the cursor in window coordinates.
     ///
     /// ```no_run

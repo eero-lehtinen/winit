@@ -425,6 +425,22 @@ impl Window {
     }
 
     #[inline]
+    pub fn register_custom_cursor_icon(
+        &self,
+        key: u64,
+        png_bytes: Vec<u8>,
+        hot_x: u32,
+        hot_y: u32,
+    ) {
+        x11_or_wayland!(match self; Window(w) => w.register_custom_cursor_icon(key, png_bytes, hot_x, hot_y))
+    }
+
+    #[inline]
+    pub fn set_custom_cursor_icon(&self, key: u64) {
+        x11_or_wayland!(match self; Window(w) => w.set_custom_cursor_icon(key))
+    }
+
+    #[inline]
     pub fn set_cursor_grab(&self, mode: CursorGrabMode) -> Result<(), ExternalError> {
         x11_or_wayland!(match self; Window(window) => window.set_cursor_grab(mode))
     }

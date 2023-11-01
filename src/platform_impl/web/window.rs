@@ -7,13 +7,14 @@ use crate::window::{
 };
 use crate::SendSyncWrapper;
 
+use base64::Engine;
 use web_sys::HtmlCanvasElement;
 
 use super::r#async::Dispatcher;
 use super::{backend, monitor::MonitorHandle, EventLoopWindowTarget, Fullscreen};
 
 use std::cell::RefCell;
-use std::collections::VecDeque;
+use std::collections::{HashMap, VecDeque};
 use std::rc::Rc;
 
 pub struct Window {
@@ -24,7 +25,8 @@ pub struct Inner {
     id: WindowId,
     pub window: web_sys::Window,
     canvas: Rc<RefCell<backend::Canvas>>,
-    previous_pointer: RefCell<&'static str>,
+    previous_pointer: RefCell<Rc<str>>,
+    custom_pointers: RefCell<HashMap<u64, Rc<str>>>,
     destroy_fn: Option<Box<dyn FnOnce()>>,
 }
 
@@ -53,7 +55,8 @@ impl Window {
             id,
             window: window.clone(),
             canvas,
-            previous_pointer: RefCell::new("auto"),
+            previous_pointer: RefCell::new("auto".into()),
+            custom_pointers: Default::default(),
             destroy_fn: Some(destroy_fn),
         };
 
@@ -195,8 +198,32 @@ impl Inner {
 
     #[inline]
     pub fn set_cursor_icon(&self, cursor: CursorIcon) {
-        *self.previous_pointer.borrow_mut() = cursor.name();
+        *self.previous_pointer.borrow_mut() = cursor.name().into();
         backend::set_canvas_style_property(self.canvas.borrow().raw(), "cursor", cursor.name());
+    }
+
+    #[inline]
+    pub fn register_custom_cursor_icon(
+        &self,
+        key: u64,
+        png_bytes: Vec<u8>,
+        hot_x: u32,
+        hot_y: u32,
+    ) {
+        let encoded = base64::engine::general_purpose::STANDARD.encode(png_bytes);
+        let pointer: Rc<str> =
+            format!("url(data:image/png;base64,{encoded}) {hot_x} {hot_y}, auto").into();
+        self.custom_pointers.borrow_mut().insert(key, pointer);
+    }
+
+    #[inline]
+    pub fn set_custom_cursor_icon(&self, key: u64) {
+        let Some(pointer) = self.custom_pointers.borrow().get(&key).cloned() else {
+            return;
+        };
+
+        *self.previous_pointer.borrow_mut() = pointer.clone();
+        backend::set_canvas_style_property(self.canvas.borrow().raw(), "cursor", &pointer);
     }
 
     #[inline]

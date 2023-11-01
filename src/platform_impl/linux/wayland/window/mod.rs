@@ -507,6 +507,21 @@ impl Window {
     }
 
     #[inline]
+    pub fn register_custom_cursor_icon(
+        &self,
+        key: u64,
+        png_bytes: Vec<u8>,
+        hot_x: u32,
+        hot_y: u32,
+    ) {
+    }
+
+    #[inline]
+    pub fn set_custom_cursor_icon(&self, key: u64) {
+        unimplemented!();
+    }
+
+    #[inline]
     pub fn set_cursor_visible(&self, visible: bool) {
         self.window_state
             .lock()
