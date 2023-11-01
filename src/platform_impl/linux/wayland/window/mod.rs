@@ -514,11 +514,15 @@ impl Window {
         hot_x: u32,
         hot_y: u32,
     ) {
+        self.window_state
+            .lock()
+            .unwrap()
+            .register_custom_cursor_icon(key, png_bytes, hot_x, hot_y);
     }
 
     #[inline]
     pub fn set_custom_cursor_icon(&self, key: u64) {
-        unimplemented!();
+        self.window_state.lock().unwrap().set_custom_cursor(key);
     }
 
     #[inline]

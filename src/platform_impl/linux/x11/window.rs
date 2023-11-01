@@ -115,7 +115,6 @@ unsafe impl Send for UnownedWindow {}
 unsafe impl Sync for UnownedWindow {}
 
 #[derive(Debug, Copy, Clone, PartialEq, Eq, Hash)]
-#[cfg_attr(feature = "serde", derive(Serialize, Deserialize))]
 enum Cursor {
     BuiltIn(CursorIcon),
     Custom(u64),
