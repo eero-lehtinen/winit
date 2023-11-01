@@ -80,7 +80,6 @@ impl XConnection {
         }
 
         let (w, h) = info.size();
-        dbg!(w, h, w * h);
 
         unsafe {
             let image = (self.xcursor.XcursorImageCreate)(w as i32, h as i32);
@@ -94,7 +93,6 @@ impl XConnection {
             let dst = slice::from_raw_parts_mut((*image).pixels, (w * h) as usize);
             let mut i = 0;
             while let Ok(Some(row)) = reader.next_row() {
-                dbg!(row);
                 for chunk in row.data().chunks_exact(4) {
                     // "Each pixel in the cursor is a 32-bit value containing ARGB with A in the high byte"
                     // So it basically wants BGRA and we have RGBA.

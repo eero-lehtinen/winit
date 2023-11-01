@@ -171,6 +171,11 @@ pub fn set_canvas_style_property(raw: &HtmlCanvasElement, property: &str, value:
         .unwrap_or_else(|err| panic!("error: {err:?}\nFailed to set {property}"))
 }
 
+pub fn get_canvas_style_property(raw: &HtmlCanvasElement, property: &str) -> Option<String> {
+    let style = raw.style();
+    style.get_property_value(property).ok()
+}
+
 pub fn is_dark_mode(window: &web_sys::Window) -> Option<bool> {
     window
         .match_media("(prefers-color-scheme: dark)")
