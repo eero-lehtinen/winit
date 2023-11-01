@@ -1,12 +1,16 @@
 //! The state of the window, which is shared with the event-loop.
 
+use std::fs::File;
+use std::io::{Seek, SeekFrom, Write};
 use std::mem::ManuallyDrop;
 use std::num::NonZeroU32;
 use std::sync::{Arc, Weak};
 use std::time::Duration;
 
+use ahash::HashMap;
 use log::{info, warn};
 
+use rustix::fd::{AsFd, OwnedFd};
 use sctk::reexports::client::protocol::wl_seat::WlSeat;
 use sctk::reexports::client::protocol::wl_shm::WlShm;
 use sctk::reexports::client::protocol::wl_surface::WlSurface;
@@ -19,13 +23,19 @@ use sctk::reexports::protocols::wp::text_input::zv3::client::zwp_text_input_v3::
 use sctk::reexports::protocols::wp::viewporter::client::wp_viewport::WpViewport;
 use sctk::reexports::protocols::xdg::shell::client::xdg_toplevel::ResizeEdge as XdgResizeEdge;
 
-use sctk::compositor::{CompositorState, Region};
-use sctk::seat::pointer::ThemedPointer;
+use sctk::compositor::{CompositorState, Region, SurfaceData, SurfaceDataExt};
+use sctk::seat::pointer::{PointerDataExt, ThemedPointer};
 use sctk::shell::xdg::window::{DecorationMode, Window, WindowConfigure};
 use sctk::shell::xdg::XdgSurface;
 use sctk::shell::WaylandSurface;
 use sctk::shm::Shm;
 use sctk::subcompositor::SubcompositorState;
+use wayland_backend::client::ObjectData;
+use wayland_client::protocol::wl_buffer::WlBuffer;
+use wayland_client::protocol::wl_shm::Format;
+use wayland_client::protocol::wl_shm_pool::WlShmPool;
+use wayland_client::protocol::{wl_shm, wl_shm_pool};
+use wayland_client::WEnum;
 use wayland_protocols_plasma::blur::client::org_kde_kwin_blur::OrgKdeKwinBlur;
 
 use crate::dpi::{LogicalPosition, LogicalSize, PhysicalSize, Size};
@@ -50,6 +60,26 @@ pub type WinitFrame = sctk::shell::xdg::fallback_frame::FallbackFrame<WinitState
 // Minimum window inner size.
 const MIN_WINDOW_SIZE: LogicalSize<u32> = LogicalSize::new(2, 1);
 
+#[derive(Debug)]
+pub struct CustomCursorData {
+    pool: WlShmPool,
+    pool_size: i32,
+    file: File,
+    map: HashMap<u64, (WlBuffer, i32, i32, i32, i32)>,
+}
+
+#[derive(Debug, Copy, Clone, PartialEq, Eq, Hash)]
+enum Cursor {
+    BuiltIn(CursorIcon),
+    Custom(u64),
+}
+
+impl Default for Cursor {
+    fn default() -> Self {
+        Self::BuiltIn(Default::default())
+    }
+}
+
 /// The state of the window which is being updated from the [`WinitState`].
 pub struct WindowState {
     /// The connection to Wayland server.
@@ -64,6 +94,8 @@ pub struct WindowState {
     /// The `Shm` to set cursor.
     pub shm: WlShm,
 
+    pub custom_cursor_data: CustomCursorData,
+
     /// The last received configure.
     pub last_configure: Option<WindowConfigure>,
 
@@ -72,6 +104,8 @@ pub struct WindowState {
 
     /// Cursor icon.
     pub cursor_icon: CursorIcon,
+
+    cursor: Cursor,
 
     /// Wether the cursor is visible.
     pub cursor_visible: bool,
@@ -172,6 +206,35 @@ impl WindowState {
             .as_ref()
             .map(|fsm| fsm.fractional_scaling(window.wl_surface(), queue_handle));
 
+        let shm = winit_state.shm.wl_shm().clone();
+
+        const INITIAL_POOL_SIZE: i32 = 16 * 16 * 4;
+
+        let mfd = memfd::MemfdOptions::default()
+            .allow_sealing(true)
+            .close_on_exec(true)
+            .create("custom-cursor-xd")
+            .unwrap();
+
+        let _ = mfd.as_file().set_len(INITIAL_POOL_SIZE as u64);
+
+        let mut file = mfd.into_file();
+
+        file.write_all(&[0; INITIAL_POOL_SIZE as usize]).unwrap();
+        file.flush().unwrap();
+
+        let pool_id = connection
+            .send_request(
+                &shm,
+                wl_shm::Request::CreatePool {
+                    size: INITIAL_POOL_SIZE,
+                    fd: file.as_fd(),
+                },
+                Some(Arc::new(IgnoreObjectData)),
+            )
+            .unwrap();
+        let shm_pool = WlShmPool::from_id(&connection, pool_id).unwrap();
+
         Self {
             blur: None,
             blur_manager: winit_state.kwin_blur_manager.clone(),
@@ -179,7 +242,8 @@ impl WindowState {
             connection,
             csd_fails: false,
             cursor_grab_mode: GrabState::new(),
-            cursor_icon: CursorIcon::Default,
+            cursor_icon: CursorIcon::default(),
+            cursor: Default::default(),
             cursor_visible: true,
             decorate: true,
             fractional_scale,
@@ -197,7 +261,13 @@ impl WindowState {
             queue_handle: queue_handle.clone(),
             resizable: true,
             scale_factor: 1.,
-            shm: winit_state.shm.wl_shm().clone(),
+            shm,
+            custom_cursor_data: CustomCursorData {
+                pool: shm_pool,
+                pool_size: INITIAL_POOL_SIZE,
+                file,
+                map: Default::default(),
+            },
             size: initial_size.to_logical(1.),
             stateless_size: initial_size.to_logical(1.),
             initial_size: Some(initial_size),
@@ -601,7 +671,10 @@ impl WindowState {
     /// Reload the cursor style on the given window.
     pub fn reload_cursor_style(&mut self) {
         if self.cursor_visible {
-            self.set_cursor(self.cursor_icon);
+            match self.cursor {
+                Cursor::BuiltIn(icon) => self.set_cursor(icon),
+                Cursor::Custom(key) => self.set_custom_cursor(key),
+            }
         } else {
             self.set_cursor_visible(self.cursor_visible);
         }
@@ -690,7 +763,7 @@ impl WindowState {
     ///
     /// Providing `None` will hide the cursor.
     pub fn set_cursor(&mut self, cursor_icon: CursorIcon) {
-        self.cursor_icon = cursor_icon;
+        self.cursor = Cursor::BuiltIn(cursor_icon);
 
         if !self.cursor_visible {
             return;
@@ -700,6 +773,110 @@ impl WindowState {
             if pointer.set_cursor(&self.connection, cursor_icon).is_err() {
                 warn!("Failed to set cursor to {:?}", cursor_icon);
             }
+        })
+    }
+
+    pub fn register_custom_cursor_icon(&mut self, key: u64, png_bytes: Vec<u8>, hx: u32, hy: u32) {
+        let decoder = png::Decoder::new(std::io::Cursor::new(png_bytes));
+
+        let mut reader = decoder.read_info().unwrap();
+        let info = reader.info();
+
+        if info.color_type != png::ColorType::Rgba || info.bit_depth != png::BitDepth::Eight {
+            panic!("Invalid png (8bit rgba required)");
+        }
+
+        let (w, h) = (info.width as i32, info.height as i32);
+        let mut image: Vec<u8> = Vec::with_capacity(reader.output_buffer_size());
+
+        while let Ok(Some(row)) = reader.next_row() {
+            for chunk in row.data().chunks_exact(4) {
+                // "Each pixel in the cursor is a 32-bit value containing ARGB with A in the high byte"
+                // So it basically wants BGRA and we have RGBA.
+                let mut chunk: [u8; 4] = chunk.try_into().unwrap();
+                chunk.swap(0, 2);
+                image.extend_from_slice(&chunk);
+            }
+        }
+
+        let buf = &image;
+        let offset = self.custom_cursor_data.file.seek(SeekFrom::End(0)).unwrap();
+
+        let new_size = offset + buf.len() as u64;
+
+        let size = new_size as i32;
+        if size > self.custom_cursor_data.pool_size {
+            self.custom_cursor_data
+                .file
+                .set_len(size as u64)
+                .expect("Failed to set new buffer length");
+            self.custom_cursor_data.pool.resize(size);
+            self.custom_cursor_data.pool_size = size;
+        }
+
+        self.custom_cursor_data.file.write_all(buf).unwrap();
+
+        let buffer_id = self
+            .connection
+            .send_request(
+                &self.custom_cursor_data.pool,
+                wl_shm_pool::Request::CreateBuffer {
+                    offset: offset as i32,
+                    width: w,
+                    height: h,
+                    stride: (w * 4),
+                    format: WEnum::Value(Format::Argb8888),
+                },
+                Some(Arc::new(IgnoreObjectData)),
+            )
+            .unwrap();
+
+        let buffer = WlBuffer::from_id(&self.connection, buffer_id).unwrap();
+
+        self.custom_cursor_data
+            .map
+            .insert(key, (buffer, w, h, hx as i32, hy as i32));
+
+        // TODO: somehow release previous buffers
+    }
+
+    pub fn set_custom_cursor(&mut self, key: u64) {
+        self.cursor = Cursor::Custom(key);
+
+        if !self.cursor_visible {
+            return;
+        }
+
+        let Some((buffer, w, h, hx, hy)) = self.custom_cursor_data.map.get(&key) else {
+            return;
+        };
+        self.apply_on_poiner(|pointer, _| {
+            let surface = pointer.surface();
+
+            let scale = surface
+                .data::<SurfaceData>()
+                .unwrap()
+                .surface_data()
+                .scale_factor();
+
+            surface.set_buffer_scale(scale);
+
+            surface.attach(Some(buffer), 0, 0);
+
+            surface.damage_buffer(0, 0, *w, *h);
+
+            surface.commit();
+
+            let serial = pointer
+                .pointer()
+                .data::<WinitPointerData>()
+                .and_then(|data| data.pointer_data().latest_enter_serial())
+                .unwrap();
+
+            // Set the pointer surface to change the pointer.
+            pointer
+                .pointer()
+                .set_cursor(serial, Some(surface), *hx / scale, *hy / scale);
         })
     }
 
@@ -837,7 +1014,10 @@ impl WindowState {
         self.cursor_visible = cursor_visible;
 
         if self.cursor_visible {
-            self.set_cursor(self.cursor_icon);
+            match self.cursor {
+                Cursor::BuiltIn(icon) => self.set_cursor(icon),
+                Cursor::Custom(key) => self.set_custom_cursor(key),
+            }
         } else {
             for pointer in self.pointers.iter().filter_map(|pointer| pointer.upgrade()) {
                 let latest_enter_serial = pointer.pointer().winit_data().latest_enter_serial();
@@ -1103,4 +1283,17 @@ fn into_sctk_adwaita_config(theme: Option<Theme>) -> sctk_adwaita::FrameConfig {
         Some(Theme::Dark) => sctk_adwaita::FrameConfig::dark(),
         None => sctk_adwaita::FrameConfig::auto(),
     }
+}
+
+struct IgnoreObjectData;
+
+impl ObjectData for IgnoreObjectData {
+    fn event(
+        self: Arc<Self>,
+        _: &wayland_client::backend::Backend,
+        _: wayland_client::backend::protocol::Message<wayland_client::backend::ObjectId, OwnedFd>,
+    ) -> Option<Arc<dyn ObjectData>> {
+        None
+    }
+    fn destroyed(&self, _: wayland_client::backend::ObjectId) {}
 }
