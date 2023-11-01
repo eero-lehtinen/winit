@@ -114,6 +114,19 @@ impl SharedState {
 unsafe impl Send for UnownedWindow {}
 unsafe impl Sync for UnownedWindow {}
 
+#[derive(Debug, Copy, Clone, PartialEq, Eq, Hash)]
+#[cfg_attr(feature = "serde", derive(Serialize, Deserialize))]
+enum Cursor {
+    BuiltIn(CursorIcon),
+    Custom(u64),
+}
+
+impl Default for Cursor {
+    fn default() -> Self {
+        Self::BuiltIn(Default::default())
+    }
+}
+
 pub(crate) struct UnownedWindow {
     pub(crate) xconn: Arc<XConnection>, // never changes
     xwindow: xproto::Window,            // never changes
@@ -122,7 +135,7 @@ pub(crate) struct UnownedWindow {
     root: xproto::Window,               // never changes
     #[allow(dead_code)]
     screen_id: i32, // never changes
-    cursor: Mutex<CursorIcon>,
+    cursor: Mutex<Cursor>,
     cursor_grabbed_mode: Mutex<CursorGrabMode>,
     #[allow(clippy::mutex_atomic)]
     cursor_visible: Mutex<bool>,
@@ -1483,9 +1496,9 @@ impl UnownedWindow {
 
     #[inline]
     pub fn set_cursor_icon(&self, cursor: CursorIcon) {
-        let old_cursor = replace(&mut *self.cursor.lock().unwrap(), cursor);
+        let old_cursor = replace(&mut *self.cursor.lock().unwrap(), Cursor::BuiltIn(cursor));
         #[allow(clippy::mutex_atomic)]
-        if cursor != old_cursor && *self.cursor_visible.lock().unwrap() {
+        if Cursor::BuiltIn(cursor) != old_cursor && *self.cursor_visible.lock().unwrap() {
             self.xconn.set_cursor_icon(self.xwindow, Some(cursor));
         }
     }
@@ -1504,7 +1517,11 @@ impl UnownedWindow {
 
     #[inline]
     pub fn set_custom_cursor_icon(&self, key: u64) {
-        self.xconn.set_custom_cursor_icon(self.xwindow, key);
+        let old_cursor = replace(&mut *self.cursor.lock().unwrap(), Cursor::Custom(key));
+        #[allow(clippy::mutex_atomic)]
+        if Cursor::Custom(key) != old_cursor && *self.cursor_visible.lock().unwrap() {
+            self.xconn.set_custom_cursor_icon(self.xwindow, key);
+        }
     }
 
     #[inline]
@@ -1599,7 +1616,11 @@ impl UnownedWindow {
         };
         *visible_lock = visible;
         drop(visible_lock);
-        self.xconn.set_cursor_icon(self.xwindow, cursor);
+        match cursor {
+            None => self.xconn.set_cursor_icon(self.xwindow, None),
+            Some(Cursor::BuiltIn(icon)) => self.xconn.set_cursor_icon(self.xwindow, Some(icon)),
+            Some(Cursor::Custom(key)) => self.xconn.set_custom_cursor_icon(self.xwindow, key),
+        }
     }
 
     #[inline]
