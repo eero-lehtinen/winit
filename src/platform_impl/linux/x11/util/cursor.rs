@@ -107,9 +107,6 @@ impl XConnection {
             (self.xcursor.XcursorImageDestroy)(image);
 
             let mut cursors = self.custom_cursors.lock().unwrap();
-            if let Some(old_cursor) = cursors.get(&key) {
-                (self.xlib.XFreeCursor)(self.display, *old_cursor);
-            }
             cursors.insert(key, cursor);
         }
     }

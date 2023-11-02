@@ -136,7 +136,7 @@ impl WinIcon {
         }
     }
 
-    fn from_handle(handle: HICON) -> Self {
+    pub(crate) fn from_handle(handle: HICON) -> Self {
         Self {
             inner: Arc::new(RaiiIcon { handle }),
         }

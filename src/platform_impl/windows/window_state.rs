@@ -5,8 +5,8 @@ use crate::{
     platform_impl::platform::{event_loop, util, Fullscreen},
     window::{CursorIcon, Theme, WindowAttributes},
 };
-use std::io;
 use std::sync::MutexGuard;
+use std::{collections::HashMap, io};
 use windows_sys::Win32::{
     Foundation::{HWND, RECT},
     Graphics::Gdi::InvalidateRgn,
@@ -23,6 +23,8 @@ use windows_sys::Win32::{
         WS_OVERLAPPEDWINDOW, WS_POPUP, WS_SIZEBOX, WS_SYSMENU, WS_VISIBLE,
     },
 };
+
+use super::PlatformIcon;
 
 /// Contains information about states and the window that the callback is going to use.
 pub(crate) struct WindowState {
@@ -65,9 +67,23 @@ pub struct SavedWindow {
     pub placement: WINDOWPLACEMENT,
 }
 
+#[derive(Debug, Copy, Clone, PartialEq, Eq, Hash)]
+pub(crate) enum UseCursor {
+    BuiltIn(CursorIcon),
+    Custom(u64),
+}
+
+impl Default for UseCursor {
+    fn default() -> Self {
+        Self::BuiltIn(Default::default())
+    }
+}
+
 #[derive(Clone)]
 pub struct MouseProperties {
     pub cursor: CursorIcon,
+    pub(crate) use_cursor: UseCursor,
+    pub custom_cursors: HashMap<u64, PlatformIcon>,
     pub capture_count: u32,
     cursor_flags: CursorFlags,
     pub last_position: Option<PhysicalPosition<f64>>,
@@ -144,6 +160,8 @@ impl WindowState {
         WindowState {
             mouse: MouseProperties {
                 cursor: CursorIcon::default(),
+                use_cursor: UseCursor::default(),
+                custom_cursors: Default::default(),
                 capture_count: 0,
                 cursor_flags: CursorFlags::empty(),
                 last_position: None,
