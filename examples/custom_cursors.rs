@@ -39,7 +39,7 @@ fn main() -> Result<(), impl std::error::Error> {
     let cursor_image_bytes2 = include_bytes!("../cross2.png").to_vec();
 
     window.register_custom_cursor_icon(0, cursor_image_bytes, 7, 7);
-    window.register_custom_cursor_icon(1, cursor_image_bytes2, 7, 7);
+    window.register_custom_cursor_icon(1, cursor_image_bytes2, 5, 5);
 
     event_loop.run(move |event, _elwt| match event {
         Event::WindowEvent { event, .. } => match event {

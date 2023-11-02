@@ -836,8 +836,6 @@ impl WindowState {
         self.custom_cursor_data
             .map
             .insert(key, (buffer, w, h, hx as i32, hy as i32));
-
-        // TODO: somehow release previous buffers
     }
 
     pub fn set_custom_cursor(&mut self, key: u64) {

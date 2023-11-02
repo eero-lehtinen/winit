@@ -16,8 +16,9 @@ use windows_sys::Win32::{
     Graphics::{
         Dwm::{DwmEnableBlurBehindWindow, DWM_BB_BLURREGION, DWM_BB_ENABLE, DWM_BLURBEHIND},
         Gdi::{
-            ChangeDisplaySettingsExW, ClientToScreen, CreateRectRgn, DeleteObject, InvalidateRgn,
-            RedrawWindow, CDS_FULLSCREEN, DISP_CHANGE_BADFLAGS, DISP_CHANGE_BADMODE,
+            ChangeDisplaySettingsExW, ClientToScreen, CreateBitmap, CreateCompatibleBitmap,
+            CreateRectRgn, DeleteObject, GetDC, InvalidateRgn, RedrawWindow, ReleaseDC,
+            SetBitmapBits, CDS_FULLSCREEN, DISP_CHANGE_BADFLAGS, DISP_CHANGE_BADMODE,
             DISP_CHANGE_BADPARAM, DISP_CHANGE_FAILED, DISP_CHANGE_SUCCESSFUL, RDW_INTERNALPAINT,
         },
     },
@@ -37,19 +38,19 @@ use windows_sys::Win32::{
             Touch::{RegisterTouchWindow, TWF_WANTPALM},
         },
         WindowsAndMessaging::{
-            CreateWindowExW, EnableMenuItem, FlashWindowEx, GetClientRect, GetCursorPos,
-            GetForegroundWindow, GetSystemMenu, GetSystemMetrics, GetWindowPlacement,
+            CreateIconIndirect, CreateWindowExW, EnableMenuItem, FlashWindowEx, GetClientRect,
+            GetCursorPos, GetForegroundWindow, GetSystemMenu, GetSystemMetrics, GetWindowPlacement,
             GetWindowTextLengthW, GetWindowTextW, IsWindowVisible, LoadCursorW, PeekMessageW,
             PostMessageW, RegisterClassExW, SetCursor, SetCursorPos, SetForegroundWindow,
             SetMenuDefaultItem, SetWindowDisplayAffinity, SetWindowPlacement, SetWindowPos,
             SetWindowTextW, TrackPopupMenu, CS_HREDRAW, CS_VREDRAW, CW_USEDEFAULT, FLASHWINFO,
             FLASHW_ALL, FLASHW_STOP, FLASHW_TIMERNOFG, FLASHW_TRAY, GWLP_HINSTANCE, HTBOTTOM,
             HTBOTTOMLEFT, HTBOTTOMRIGHT, HTCAPTION, HTLEFT, HTRIGHT, HTTOP, HTTOPLEFT, HTTOPRIGHT,
-            MENU_ITEM_STATE, MFS_DISABLED, MFS_ENABLED, MF_BYCOMMAND, NID_READY, PM_NOREMOVE,
-            SC_CLOSE, SC_MAXIMIZE, SC_MINIMIZE, SC_MOVE, SC_RESTORE, SC_SIZE, SM_DIGITIZER,
-            SWP_ASYNCWINDOWPOS, SWP_NOACTIVATE, SWP_NOSIZE, SWP_NOZORDER, TPM_LEFTALIGN,
-            TPM_RETURNCMD, WDA_EXCLUDEFROMCAPTURE, WDA_NONE, WM_NCLBUTTONDOWN, WM_SYSCOMMAND,
-            WNDCLASSEXW,
+            ICONINFO, MENU_ITEM_STATE, MFS_DISABLED, MFS_ENABLED, MF_BYCOMMAND, NID_READY,
+            PM_NOREMOVE, SC_CLOSE, SC_MAXIMIZE, SC_MINIMIZE, SC_MOVE, SC_RESTORE, SC_SIZE,
+            SM_DIGITIZER, SWP_ASYNCWINDOWPOS, SWP_NOACTIVATE, SWP_NOSIZE, SWP_NOZORDER,
+            TPM_LEFTALIGN, TPM_RETURNCMD, WDA_EXCLUDEFROMCAPTURE, WDA_NONE, WM_NCLBUTTONDOWN,
+            WM_SYSCOMMAND, WNDCLASSEXW,
         },
     },
 };
@@ -78,6 +79,11 @@ use crate::{
         CursorGrabMode, CursorIcon, ImePurpose, ResizeDirection, Theme, UserAttentionType,
         WindowAttributes, WindowButtons, WindowLevel,
     },
+};
+
+use super::{
+    window_state::{MouseProperties, UseCursor},
+    WinIcon,
 };
 
 /// The Win32 implementation of the main `Window` object.
@@ -396,10 +402,115 @@ impl Window {
 
     #[inline]
     pub fn set_cursor_icon(&self, cursor: CursorIcon) {
-        self.window_state_lock().mouse.cursor = cursor;
+        self.window_state_lock().mouse.use_cursor = UseCursor::BuiltIn(cursor);
         self.thread_executor.execute_in_thread(move || unsafe {
             let cursor = LoadCursorW(0, util::to_windows_cursor(cursor));
             SetCursor(cursor);
+        });
+    }
+
+    #[inline]
+    pub fn register_custom_cursor_icon(
+        &self,
+        key: u64,
+        png_bytes: Vec<u8>,
+        hot_x: u32,
+        hot_y: u32,
+    ) {
+        let decoder = png::Decoder::new(std::io::Cursor::new(png_bytes));
+
+        let mut reader = decoder.read_info().unwrap();
+        let info = reader.info();
+
+        if info.color_type != png::ColorType::Rgba || info.bit_depth != png::BitDepth::Eight {
+            panic!("Invalid png (8bit rgba required)");
+        }
+
+        let (w, h) = info.size();
+        let mut image: Vec<u8> = Vec::with_capacity(reader.output_buffer_size());
+
+        while let Ok(Some(row)) = reader.next_row() {
+            for chunk in row.data().chunks_exact(4) {
+                // Wants BGRA and we have RGBA.
+                let mut chunk: [u8; 4] = chunk.try_into().unwrap();
+                chunk.swap(0, 2);
+                image.extend_from_slice(&chunk);
+            }
+        }
+
+        let handle = unsafe {
+            // always visible for each pixel
+            let mask_bits: Vec<u8> = vec![0xff; (((w + 15) >> 3) * h) as usize];
+            let hbm_mask = CreateBitmap(w as i32, h as i32, 1, 1, mask_bits.as_ptr() as *const _);
+            if hbm_mask == 0 {
+                panic!("Failed to create mask bitmap");
+                // return Err(BadIcon::OsError(io::Error::last_os_error()));
+            }
+
+            let hdc_screen = GetDC(0);
+            if hdc_screen == 0 {
+                DeleteObject(hbm_mask);
+                panic!("Failed to get screen DC");
+                // return Err(BadIcon::OsError(io::Error::last_os_error()));
+            }
+
+            // uses CreateCompatibleBitmap instead of CreateBitmap according to MSDN
+            // https://learn.microsoft.com/en-us/windows/win32/api/wingdi/nf-wingdi-createbitmap
+            let hbm_color = CreateCompatibleBitmap(hdc_screen, w as i32, h as i32);
+
+            if hbm_color == 0 {
+                DeleteObject(hbm_mask);
+                ReleaseDC(0, hdc_screen);
+                // return Err(BadIcon::OsError(io::Error::last_os_error()));
+            }
+
+            SetBitmapBits(
+                hbm_color,
+                image.len() as u32,
+                image.as_ptr() as *const c_void,
+            );
+
+            ReleaseDC(0, hdc_screen);
+
+            let icon_info = ICONINFO {
+                fIcon: 0,
+                xHotspot: hot_x,
+                yHotspot: hot_y,
+                hbmMask: hbm_mask,
+                hbmColor: hbm_color,
+            };
+
+            CreateIconIndirect(&icon_info as *const _)
+        };
+
+        if handle == 0 {
+            panic!("Failed to create icon");
+            // Err(BadIcon::OsError(io::Error::last_os_error()))
+        }
+
+        let cursor = WinIcon::from_handle(handle);
+
+        self.window_state_lock()
+            .mouse
+            .custom_cursors
+            .insert(key, cursor);
+    }
+
+    #[inline]
+    pub fn set_custom_cursor_icon(&self, key: u64) {
+        let mut state = self.window_state_lock();
+        let MouseProperties {
+            custom_cursors,
+            use_cursor: cursor,
+            ..
+        } = &mut state.mouse;
+        let Some(new_cursor) = custom_cursors.get(&key) else {
+            return;
+        };
+        *cursor = UseCursor::Custom(key);
+        let handle = new_cursor.as_raw_handle();
+        self.thread_executor.execute_in_thread(move || unsafe {
+            SetCursor(handle);
         });
     }
 
