@@ -21,8 +21,6 @@ fn main() -> Result<(), impl std::error::Error> {
     #[cfg(wasm_platform)]
     console_log::init_with_level(log::Level::Debug).unwrap();
 
-    log::info!("asdf");
-
     let event_loop = EventLoop::new().unwrap();
     let builder = WindowBuilder::new().with_title("A fantastic window!");
     #[cfg(wasm_platform)]

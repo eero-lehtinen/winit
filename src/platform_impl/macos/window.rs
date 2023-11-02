@@ -1,5 +1,6 @@
 #![allow(clippy::unnecessary_cast)]
 
+use std::collections::HashMap;
 use std::collections::VecDeque;
 use std::f64;
 use std::ops;
@@ -32,6 +33,7 @@ use crate::{
     },
 };
 use core_graphics::display::{CGDisplay, CGPoint};
+use icrate::Foundation::NSData;
 use icrate::Foundation::{
     CGFloat, MainThreadBound, MainThreadMarker, NSArray, NSCopying, NSInteger, NSObject, NSPoint,
     NSRect, NSSize, NSString,
@@ -40,6 +42,7 @@ use objc2::declare::{Ivar, IvarDrop};
 use objc2::rc::{autoreleasepool, Id};
 use objc2::{declare_class, msg_send, msg_send_id, mutability, sel, ClassType};
 
+use super::appkit::NSImage;
 use super::appkit::{
     NSApp, NSAppKitVersion, NSAppearance, NSApplicationPresentationOptions, NSBackingStoreType,
     NSColor, NSCursor, NSFilenamesPboardType, NSRequestUserAttentionType, NSResponder, NSScreen,
@@ -241,6 +244,8 @@ pub struct SharedState {
     pub(crate) option_as_alt: OptionAsAlt,
 
     decorations: bool,
+
+    custom_cursors: HashMap<u64, Id<NSCursor>>,
 }
 
 impl SharedState {
@@ -831,6 +836,39 @@ impl WinitWindow {
     pub fn set_cursor_icon(&self, icon: CursorIcon) {
         let view = self.view();
         view.set_cursor_icon(NSCursor::from_icon(icon));
+        self.invalidateCursorRectsForView(&view);
+    }
+
+    #[inline]
+    pub fn register_custom_cursor_icon(
+        &self,
+        key: u64,
+        png_bytes: Vec<u8>,
+        hot_x: u32,
+        hot_y: u32,
+    ) {
+        let data = NSData::with_bytes(&png_bytes);
+        let image = NSImage::new_with_data(&data);
+        let cursor = NSCursor::new(&image, NSPoint::new(hot_x as f64, hot_y as f64));
+        self.shared_state
+            .lock()
+            .unwrap()
+            .custom_cursors
+            .insert(key, cursor);
+    }
+
+    #[inline]
+    pub fn set_custom_cursor_icon(&self, key: u64) {
+        let cursor = self
+            .shared_state
+            .lock()
+            .unwrap()
+            .custom_cursors
+            .get(&key)
+            .cloned()
+            .unwrap();
+        let view = self.view();
+        view.set_cursor_icon(cursor);
         self.invalidateCursorRectsForView(&view);
     }
 
