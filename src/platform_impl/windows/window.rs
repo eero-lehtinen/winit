@@ -82,7 +82,7 @@ use crate::{
 };
 
 use super::{
-    window_state::{MouseProperties, UseCursor},
+    window_state::{MouseProperties, SelectedCursor},
     WinIcon,
 };
 
@@ -402,7 +402,7 @@ impl Window {
 
     #[inline]
     pub fn set_cursor_icon(&self, cursor: CursorIcon) {
-        self.window_state_lock().mouse.use_cursor = UseCursor::BuiltIn(cursor);
+        self.window_state_lock().mouse.selected_cursor = SelectedCursor::BuiltIn(cursor);
         self.thread_executor.execute_in_thread(move || unsafe {
             let cursor = LoadCursorW(0, util::to_windows_cursor(cursor));
             SetCursor(cursor);
@@ -444,24 +444,17 @@ impl Window {
             let hbm_mask = CreateBitmap(w as i32, h as i32, 1, 1, mask_bits.as_ptr() as *const _);
             if hbm_mask == 0 {
                 panic!("Failed to create mask bitmap");
-                // return Err(BadIcon::OsError(io::Error::last_os_error()));
             }
 
             let hdc_screen = GetDC(0);
             if hdc_screen == 0 {
-                DeleteObject(hbm_mask);
                 panic!("Failed to get screen DC");
-                // return Err(BadIcon::OsError(io::Error::last_os_error()));
             }
 
-            // uses CreateCompatibleBitmap instead of CreateBitmap according to MSDN
-            // https://learn.microsoft.com/en-us/windows/win32/api/wingdi/nf-wingdi-createbitmap
             let hbm_color = CreateCompatibleBitmap(hdc_screen, w as i32, h as i32);
 
             if hbm_color == 0 {
-                DeleteObject(hbm_mask);
-                ReleaseDC(0, hdc_screen);
-                // return Err(BadIcon::OsError(io::Error::last_os_error()));
+                panic!("Failed to create color bitmap");
             }
 
             SetBitmapBits(
@@ -485,15 +478,16 @@ impl Window {
 
         if handle == 0 {
             panic!("Failed to create icon");
-            // Err(BadIcon::OsError(io::Error::last_os_error()))
         }
 
         let cursor = WinIcon::from_handle(handle);
 
-        self.window_state_lock()
-            .mouse
-            .custom_cursors
-            .insert(key, cursor);
+        let mut state = self.window_state_lock();
+        state.mouse.custom_cursors.insert(key, cursor);
+
+        if state.mouse.selected_cursor == SelectedCursor::Custom(key) {
+            self.set_custom_cursor_icon(key);
+        }
     }
 
     #[inline]
@@ -501,13 +495,13 @@ impl Window {
         let mut state = self.window_state_lock();
         let MouseProperties {
             custom_cursors,
-            use_cursor: cursor,
+            selected_cursor: cursor,
             ..
         } = &mut state.mouse;
         let Some(new_cursor) = custom_cursors.get(&key) else {
             return;
         };
-        *cursor = UseCursor::Custom(key);
+        *cursor = SelectedCursor::Custom(key);
         let handle = new_cursor.as_raw_handle();
         self.thread_executor.execute_in_thread(move || unsafe {
             SetCursor(handle);

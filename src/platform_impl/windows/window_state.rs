@@ -68,12 +68,12 @@ pub struct SavedWindow {
 }
 
 #[derive(Debug, Copy, Clone, PartialEq, Eq, Hash)]
-pub(crate) enum UseCursor {
+pub(crate) enum SelectedCursor {
     BuiltIn(CursorIcon),
     Custom(u64),
 }
 
-impl Default for UseCursor {
+impl Default for SelectedCursor {
     fn default() -> Self {
         Self::BuiltIn(Default::default())
     }
@@ -82,7 +82,7 @@ impl Default for UseCursor {
 #[derive(Clone)]
 pub struct MouseProperties {
     pub cursor: CursorIcon,
-    pub(crate) use_cursor: UseCursor,
+    pub(crate) selected_cursor: SelectedCursor,
     pub custom_cursors: HashMap<u64, PlatformIcon>,
     pub capture_count: u32,
     cursor_flags: CursorFlags,
@@ -160,7 +160,7 @@ impl WindowState {
         WindowState {
             mouse: MouseProperties {
                 cursor: CursorIcon::default(),
-                use_cursor: UseCursor::default(),
+                selected_cursor: SelectedCursor::default(),
                 custom_cursors: Default::default(),
                 capture_count: 0,
                 cursor_flags: CursorFlags::empty(),
