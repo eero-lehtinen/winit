@@ -906,6 +906,10 @@ impl Window {
 
     pub fn set_cursor_icon(&self, _: window::CursorIcon) {}
 
+    pub fn register_custom_cursor_icon(&self, _: u64, _: Vec<u8>, _: u32, _: u32) {}
+
+    pub fn set_custom_cursor_icon(&self, _: u64) {}
+
     pub fn set_cursor_position(&self, _: Position) -> Result<(), error::ExternalError> {
         Err(error::ExternalError::NotSupported(
             error::NotSupportedError::new(),

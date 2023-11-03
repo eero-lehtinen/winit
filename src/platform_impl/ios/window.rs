@@ -177,6 +177,14 @@ impl Inner {
         debug!("`Window::set_cursor_icon` ignored on iOS")
     }
 
+    pub fn register_custom_cursor_icon(&self, _: u64, _: Vec<u8>, _: u32, _: u32) {
+        debug!("`Window::register_custom_cursor_icon` ignored on iOS")
+    }
+
+    pub fn set_custom_cursor_icon(&self, _: u64) {
+        debug!("`Window::set_custom_cursor_icon` ignored on iOS")
+    }
+
     pub fn set_cursor_position(&self, _position: Position) -> Result<(), ExternalError> {
         Err(ExternalError::NotSupported(NotSupportedError::new()))
     }
