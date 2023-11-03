@@ -7,6 +7,7 @@ use std::{
     sync::{Arc, Mutex, MutexGuard},
 };
 
+use cursor_icon::CursorIcon;
 use x11rb::{
     connection::Connection,
     properties::{WmHints, WmHintsState, WmSizeHints, WmSizeHintsSpecification},
@@ -29,13 +30,15 @@ use crate::{
         PlatformSpecificWindowBuilderAttributes, VideoMode as PlatformVideoMode,
     },
     window::{
-        CursorGrabMode, CursorIcon, ImePurpose, ResizeDirection, Theme, UserAttentionType,
-        WindowAttributes, WindowButtons, WindowLevel,
+        CursorGrabMode, ImePurpose, ResizeDirection, Theme, UserAttentionType, WindowAttributes,
+        WindowButtons, WindowLevel,
     },
 };
 
 use super::{
-    ffi, util, CookieResultExt, EventLoopWindowTarget, ImeRequest, ImeSender, VoidCookie, WindowId,
+    ffi,
+    util::{self, SelectedCursor},
+    CookieResultExt, EventLoopWindowTarget, ImeRequest, ImeSender, VoidCookie, WindowId,
     XConnection,
 };
 
@@ -114,18 +117,6 @@ impl SharedState {
 unsafe impl Send for UnownedWindow {}
 unsafe impl Sync for UnownedWindow {}
 
-#[derive(Debug, Copy, Clone, PartialEq, Eq, Hash)]
-enum Cursor {
-    BuiltIn(CursorIcon),
-    Custom(u64),
-}
-
-impl Default for Cursor {
-    fn default() -> Self {
-        Self::BuiltIn(Default::default())
-    }
-}
-
 pub(crate) struct UnownedWindow {
     pub(crate) xconn: Arc<XConnection>, // never changes
     xwindow: xproto::Window,            // never changes
@@ -134,7 +125,7 @@ pub(crate) struct UnownedWindow {
     root: xproto::Window,               // never changes
     #[allow(dead_code)]
     screen_id: i32, // never changes
-    cursor: Mutex<Cursor>,
+    selected_cursor: Mutex<SelectedCursor>,
     cursor_grabbed_mode: Mutex<CursorGrabMode>,
     #[allow(clippy::mutex_atomic)]
     cursor_visible: Mutex<bool>,
@@ -362,7 +353,7 @@ impl UnownedWindow {
             visual,
             root,
             screen_id,
-            cursor: Default::default(),
+            selected_cursor: Default::default(),
             cursor_grabbed_mode: Mutex::new(CursorGrabMode::None),
             cursor_visible: Mutex::new(true),
             ime_sender: Mutex::new(event_loop.ime_sender.clone()),
@@ -1495,10 +1486,25 @@ impl UnownedWindow {
 
     #[inline]
     pub fn set_cursor_icon(&self, cursor: CursorIcon) {
-        let old_cursor = replace(&mut *self.cursor.lock().unwrap(), Cursor::BuiltIn(cursor));
+        self.set_cursor(SelectedCursor::BuiltIn(cursor));
+    }
+
+    #[inline]
+    pub fn set_custom_cursor_icon(&self, key: u64) {
+        self.set_cursor(SelectedCursor::Custom(key));
+    }
+
+    #[inline]
+    pub fn set_cursor(&self, cursor: SelectedCursor) {
+        let old_cursor = replace(&mut *self.selected_cursor.lock().unwrap(), cursor);
         #[allow(clippy::mutex_atomic)]
-        if Cursor::BuiltIn(cursor) != old_cursor && *self.cursor_visible.lock().unwrap() {
-            self.xconn.set_cursor_icon(self.xwindow, Some(cursor));
+        if cursor != old_cursor && *self.cursor_visible.lock().unwrap() {
+            match cursor {
+                SelectedCursor::BuiltIn(cursor_icon) => {
+                    self.xconn.set_cursor_icon(self.xwindow, Some(cursor_icon))
+                }
+                SelectedCursor::Custom(key) => self.xconn.set_custom_cursor_icon(self.xwindow, key),
+            }
         }
     }
 
@@ -1511,16 +1517,7 @@ impl UnownedWindow {
         hot_y: u32,
     ) {
         self.xconn
-            .register_custom_cursor_icon(key, png_bytes, hot_x, hot_y);
-    }
-
-    #[inline]
-    pub fn set_custom_cursor_icon(&self, key: u64) {
-        let old_cursor = replace(&mut *self.cursor.lock().unwrap(), Cursor::Custom(key));
-        #[allow(clippy::mutex_atomic)]
-        if Cursor::Custom(key) != old_cursor && *self.cursor_visible.lock().unwrap() {
-            self.xconn.set_custom_cursor_icon(self.xwindow, key);
-        }
+            .register_custom_cursor_icon(self.xwindow, key, png_bytes, hot_x, hot_y);
     }
 
     #[inline]
@@ -1609,7 +1606,7 @@ impl UnownedWindow {
             return;
         }
         let cursor = if visible {
-            Some(*self.cursor.lock().unwrap())
+            Some(*self.selected_cursor.lock().unwrap())
         } else {
             None
         };
@@ -1617,8 +1614,12 @@ impl UnownedWindow {
         drop(visible_lock);
         match cursor {
             None => self.xconn.set_cursor_icon(self.xwindow, None),
-            Some(Cursor::BuiltIn(icon)) => self.xconn.set_cursor_icon(self.xwindow, Some(icon)),
-            Some(Cursor::Custom(key)) => self.xconn.set_custom_cursor_icon(self.xwindow, key),
+            Some(SelectedCursor::BuiltIn(icon)) => {
+                self.xconn.set_cursor_icon(self.xwindow, Some(icon))
+            }
+            Some(SelectedCursor::Custom(key)) => {
+                self.xconn.set_custom_cursor_icon(self.xwindow, key)
+            }
         }
     }
 

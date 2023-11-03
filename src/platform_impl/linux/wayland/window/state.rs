@@ -127,23 +127,11 @@ impl CustomCursor {
     }
 }
 
-#[derive(Debug, Clone)]
+#[derive(Debug, Clone, Copy, Eq, PartialEq)]
 enum SelectedCursor {
     BuiltIn(CursorIcon),
-    Custom(Arc<CustomCursor>),
+    Custom(u64),
 }
-
-impl PartialEq for SelectedCursor {
-    fn eq(&self, other: &Self) -> bool {
-        match (self, other) {
-            (Self::BuiltIn(icon), Self::BuiltIn(other_icon)) => icon == other_icon,
-            (Self::Custom(cursor), Self::Custom(other_cursor)) => Arc::ptr_eq(cursor, other_cursor),
-            _ => false,
-        }
-    }
-}
-
-impl Eq for SelectedCursor {}
 
 impl Default for SelectedCursor {
     fn default() -> Self {
@@ -706,7 +694,7 @@ impl WindowState {
         if self.cursor_visible {
             match &self.selected_cursor {
                 SelectedCursor::BuiltIn(icon) => self.set_cursor(*icon),
-                SelectedCursor::Custom(cursor) => self.set_custom_cursor_impl(cursor.clone()),
+                SelectedCursor::Custom(cursor) => self.set_custom_cursor(*cursor),
             }
         } else {
             self.set_cursor_visible(self.cursor_visible);
@@ -825,7 +813,7 @@ impl WindowState {
             panic!("Invalid png (8bit rgba required)");
         }
 
-        let (w, h) = (info.width as i32, info.height as i32);
+        let (w, h) = info.size();
         let mut image: Vec<u8> = Vec::with_capacity(reader.output_buffer_size());
 
         while let Ok(Some(row)) = reader.next_row() {
@@ -838,33 +826,30 @@ impl WindowState {
             }
         }
 
-        self.custom_cursors.insert(
-            key,
-            Arc::new(CustomCursor::new(
-                &self.connection,
-                &self.shm,
-                &image,
-                w,
-                h,
-                hot_y as i32,
-                hot_x as i32,
-            )),
+        let new_cursor = CustomCursor::new(
+            &self.connection,
+            &self.shm,
+            &image,
+            w as i32,
+            h as i32,
+            hot_y as i32,
+            hot_x as i32,
         );
+        self.custom_cursors.insert(key, Arc::new(new_cursor));
+        if self.selected_cursor == SelectedCursor::Custom(key) {
+            self.set_custom_cursor(key);
+        }
     }
 
     pub fn set_custom_cursor(&mut self, key: u64) {
         let Some(cursor) = self.custom_cursors.get(&key) else {
             return;
         };
-        self.selected_cursor = SelectedCursor::Custom(cursor.clone());
+        self.selected_cursor = SelectedCursor::Custom(key);
 
         if !self.cursor_visible {
             return;
         }
-        self.set_custom_cursor_impl(cursor.clone());
-    }
-
-    fn set_custom_cursor_impl(&mut self, cursor: Arc<CustomCursor>) {
         self.apply_on_poiner(|pointer, _| {
             let surface = pointer.surface();
 
@@ -1031,7 +1016,7 @@ impl WindowState {
         if self.cursor_visible {
             match &self.selected_cursor {
                 SelectedCursor::BuiltIn(icon) => self.set_cursor(*icon),
-                SelectedCursor::Custom(cursor) => self.set_custom_cursor_impl(cursor.clone()),
+                SelectedCursor::Custom(key) => self.set_custom_cursor(*key),
             }
         } else {
             for pointer in self.pointers.iter().filter_map(|pointer| pointer.upgrade()) {

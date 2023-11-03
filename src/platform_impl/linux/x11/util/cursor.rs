@@ -7,28 +7,74 @@ use crate::window::CursorIcon;
 
 use super::*;
 
+#[derive(Debug, Clone, Copy)]
+pub struct CustomCursor(ffi::Cursor);
+
+impl CustomCursor {
+    unsafe fn new(
+        xcursor: &ffi::Xcursor,
+        display: *mut ffi::Display,
+        bgra_bytes: &[u8],
+        w: u32,
+        h: u32,
+        hot_x: u32,
+        hot_y: u32,
+    ) -> Self {
+        unsafe {
+            let image = (xcursor.XcursorImageCreate)(w as i32, h as i32);
+            if image.is_null() {
+                panic!("failed to allocate cursor image");
+            }
+            (*image).xhot = hot_x;
+            (*image).yhot = hot_y;
+            (*image).delay = 0;
+
+            let dst = slice::from_raw_parts_mut((*image).pixels, (w * h) as usize);
+            for (i, chunk) in bgra_bytes.chunks_exact(4).enumerate() {
+                dst[i] = (chunk[0] as u32)
+                    | (chunk[1] as u32) << 8
+                    | (chunk[2] as u32) << 16
+                    | (chunk[3] as u32) << 24;
+            }
+
+            let cursor = (xcursor.XcursorImageLoadCursor)(display, image);
+            (xcursor.XcursorImageDestroy)(image);
+            CustomCursor(cursor)
+        }
+    }
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum SelectedCursor {
+    BuiltIn(CursorIcon),
+    Custom(u64),
+}
+
+impl Default for SelectedCursor {
+    fn default() -> Self {
+        SelectedCursor::BuiltIn(Default::default())
+    }
+}
+
 impl XConnection {
-    pub fn set_cursor_icon(&self, window: xproto::Window, cursor: Option<CursorIcon>) {
+    pub fn set_cursor_icon(&self, window: xproto::Window, cursor_icon: Option<CursorIcon>) {
         let cursor = *self
             .cursor_cache
             .lock()
             .unwrap()
-            .entry(cursor)
-            .or_insert_with(|| self.get_cursor(cursor));
+            .entry(cursor_icon)
+            .or_insert_with(|| self.get_cursor(cursor_icon));
 
         self.update_cursor(window, cursor)
             .expect("Failed to set cursor");
     }
 
     pub fn set_custom_cursor_icon(&self, window: xproto::Window, key: u64) {
-        let cursor = *self
-            .custom_cursors
-            .lock()
-            .unwrap()
-            .entry(key)
-            .or_insert_with(|| self.create_empty_cursor());
+        let Some(cursor) = self.custom_cursors.lock().unwrap().get(&key).copied() else {
+            return;
+        };
 
-        self.update_cursor(window, cursor)
+        self.update_cursor(window, cursor.0)
             .expect("Failed to set cursor");
     }
 
@@ -65,6 +111,7 @@ impl XConnection {
 
     pub fn register_custom_cursor_icon(
         &self,
+        window: xproto::Window,
         key: u64,
         png_bytes: Vec<u8>,
         hot_x: u32,
@@ -80,35 +127,30 @@ impl XConnection {
         }
 
         let (w, h) = info.size();
+        let mut image: Vec<u8> = Vec::with_capacity(reader.output_buffer_size());
 
-        unsafe {
-            let image = (self.xcursor.XcursorImageCreate)(w as i32, h as i32);
-            if image.is_null() {
-                panic!("failed to allocate cursor image");
+        while let Ok(Some(row)) = reader.next_row() {
+            for chunk in row.data().chunks_exact(4) {
+                // "Each pixel in the cursor is a 32-bit value containing ARGB with A in the high byte"
+                // So it basically wants BGRA and we have RGBA.
+                let mut chunk: [u8; 4] = chunk.try_into().unwrap();
+                chunk.swap(0, 2);
+                image.extend_from_slice(&chunk);
             }
-            (*image).xhot = hot_x;
-            (*image).yhot = hot_y;
-            (*image).delay = 0;
-
-            let dst = slice::from_raw_parts_mut((*image).pixels, (w * h) as usize);
-            let mut i = 0;
-            while let Ok(Some(row)) = reader.next_row() {
-                for chunk in row.data().chunks_exact(4) {
-                    // "Each pixel in the cursor is a 32-bit value containing ARGB with A in the high byte"
-                    // So it basically wants BGRA and we have RGBA.
-                    let mut chunk: [u8; 4] = chunk.try_into().unwrap();
-                    chunk.swap(0, 2);
-                    dst[i] = std::mem::transmute(chunk);
-                    i += 1;
-                }
-            }
-
-            let cursor = (self.xcursor.XcursorImageLoadCursor)(self.display, image);
-            (self.xcursor.XcursorImageDestroy)(image);
-
-            let mut cursors = self.custom_cursors.lock().unwrap();
-            cursors.insert(key, cursor);
         }
+
+        let new_cursor =
+            unsafe { CustomCursor::new(&self.xcursor, self.display, &image, w, h, hot_x, hot_y) };
+        let mut cursors = self.custom_cursors.lock().unwrap();
+        if let Some(cursor) = cursors.get(&key) {
+            if *self.selected_cursor.lock().unwrap() == SelectedCursor::Custom(key) {
+                self.update_cursor(window, new_cursor.0).unwrap();
+            }
+            unsafe {
+                (self.xlib.XFreeCursor)(self.display, cursor.0);
+            }
+        }
+        cursors.insert(key, new_cursor);
     }
 
     fn get_cursor(&self, cursor: Option<CursorIcon>) -> ffi::Cursor {
