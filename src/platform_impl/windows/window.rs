@@ -58,7 +58,7 @@ use windows_sys::Win32::{
 use crate::{
     dpi::{PhysicalPosition, PhysicalSize, Position, Size},
     error::{ExternalError, NotSupportedError, OsError as RootOsError},
-    icon::Icon,
+    icon::{Icon, RgbaIcon},
     platform_impl::platform::{
         dark_mode::try_theme,
         definitions::{
@@ -410,33 +410,17 @@ impl Window {
     }
 
     #[inline]
-    pub fn register_custom_cursor_icon(
-        &self,
-        key: u64,
-        png_bytes: Vec<u8>,
-        hot_x: u32,
-        hot_y: u32,
-    ) {
-        let decoder = png::Decoder::new(std::io::Cursor::new(png_bytes));
+    pub fn register_custom_cursor_icon(&self, key: u64, mut icon: CursorImage) {
+        // Swap to bgra
+        icon.rgba
+            .chunks_exact_mut(4)
+            .for_each(|chunk| chunk.swap(0, 2));
 
-        let mut reader = decoder.read_info().unwrap();
-        let info = reader.info();
-
-        if info.color_type != png::ColorType::Rgba || info.bit_depth != png::BitDepth::Eight {
-            panic!("Invalid png (8bit rgba required)");
-        }
-
-        let (w, h) = info.size();
-        let mut image: Vec<u8> = Vec::with_capacity(reader.output_buffer_size());
-
-        while let Ok(Some(row)) = reader.next_row() {
-            for chunk in row.data().chunks_exact(4) {
-                // Wants BGRA and we have RGBA.
-                let mut chunk: [u8; 4] = chunk.try_into().unwrap();
-                chunk.swap(0, 2);
-                image.extend_from_slice(&chunk);
-            }
-        }
+        let image = &icon.rgba;
+        let w = icon.width;
+        let h = icon.height;
+        let hot_x = icon.hotspot_x as i32;
+        let hot_y = icon.hotspot_y as i32;
 
         let handle = unsafe {
             // always visible for each pixel

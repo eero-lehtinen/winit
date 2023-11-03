@@ -7,6 +7,8 @@ use std::{
     sync::{Arc, Mutex, MutexGuard},
 };
 
+use crate::cursor_image::CursorImage;
+
 use cursor_icon::CursorIcon;
 use x11rb::{
     connection::Connection,
@@ -1509,15 +1511,9 @@ impl UnownedWindow {
     }
 
     #[inline]
-    pub fn register_custom_cursor_icon(
-        &self,
-        key: u64,
-        png_bytes: Vec<u8>,
-        hot_x: u32,
-        hot_y: u32,
-    ) {
+    pub fn register_custom_cursor_icon(&self, key: u64, image: CursorImage) {
         self.xconn
-            .register_custom_cursor_icon(self.xwindow, key, png_bytes, hot_x, hot_y);
+            .register_custom_cursor_icon(self.xwindow, key, image);
     }
 
     #[inline]

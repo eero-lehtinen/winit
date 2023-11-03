@@ -3,11 +3,20 @@
 #[cfg(not(wasm_platform))]
 use simple_logger::SimpleLogger;
 use winit::{
+    cursor_image::CursorImage,
     event::{ElementState, Event, KeyEvent, WindowEvent},
     event_loop::EventLoop,
     keyboard::{KeyCode, PhysicalKey},
     window::WindowBuilder,
 };
+
+fn decode_cursor_image(bytes: &[u8]) -> CursorImage {
+    let img = image::load_from_memory(bytes).unwrap().to_rgba8();
+    let samples = img.into_flat_samples();
+    let (_, w, h) = samples.extents();
+    let (w, h) = (w as u32, h as u32);
+    CursorImage::from_rgba(samples.samples, w, h, w / 2, h / 2).unwrap()
+}
 
 #[path = "util/fill.rs"]
 mod fill;
@@ -33,11 +42,10 @@ fn main() -> Result<(), impl std::error::Error> {
     let mut cursor_key = 0;
     let mut cursor_visible = true;
 
-    let cursor_image_bytes = include_bytes!("../cross.png").to_vec();
-    let cursor_image_bytes2 = include_bytes!("../cross2.png").to_vec();
-
-    window.register_custom_cursor_icon(0, cursor_image_bytes.clone(), 7, 7);
-    window.register_custom_cursor_icon(1, cursor_image_bytes2.clone(), 5, 5);
+    let icon1 = decode_cursor_image(include_bytes!("data/cross.png"));
+    let icon2 = decode_cursor_image(include_bytes!("data/cross2.png"));
+    window.register_custom_cursor_icon(0, icon1);
+    window.register_custom_cursor_icon(1, icon2);
 
     event_loop.run(move |event, _elwt| match event {
         Event::WindowEvent { event, .. } => match event {

@@ -1,7 +1,5 @@
 //! The state of the window, which is shared with the event-loop.
 
-use std::fs::File;
-use std::io::Write;
 use std::mem::ManuallyDrop;
 use std::num::NonZeroU32;
 use std::sync::{Arc, Weak};
@@ -10,7 +8,6 @@ use std::time::Duration;
 use ahash::AHashMap;
 use log::{info, warn};
 
-use rustix::fd::{AsFd, OwnedFd};
 use sctk::reexports::client::protocol::wl_seat::WlSeat;
 use sctk::reexports::client::protocol::wl_shm::WlShm;
 use sctk::reexports::client::protocol::wl_surface::WlSurface;
@@ -30,19 +27,15 @@ use sctk::shell::xdg::XdgSurface;
 use sctk::shell::WaylandSurface;
 use sctk::shm::Shm;
 use sctk::subcompositor::SubcompositorState;
-use wayland_backend::client::ObjectData;
-use wayland_client::protocol::wl_buffer::WlBuffer;
-use wayland_client::protocol::wl_shm::Format;
-use wayland_client::protocol::wl_shm_pool::WlShmPool;
-use wayland_client::protocol::{wl_shm, wl_shm_pool};
-use wayland_client::WEnum;
 use wayland_protocols_plasma::blur::client::org_kde_kwin_blur::OrgKdeKwinBlur;
 
+use crate::cursor_image::CursorImage;
 use crate::dpi::{LogicalPosition, LogicalSize, PhysicalSize, Size};
 use crate::error::{ExternalError, NotSupportedError};
 use crate::event::WindowEvent;
 use crate::platform_impl::wayland::event_loop::sink::EventSink;
 use crate::platform_impl::wayland::make_wid;
+use crate::platform_impl::wayland::types::cursor::{CustomCursor, SelectedCursor};
 use crate::platform_impl::wayland::types::kwin_blur::KWinBlurManager;
 use crate::platform_impl::WindowId;
 use crate::window::{CursorGrabMode, CursorIcon, ImePurpose, ResizeDirection, Theme};
@@ -59,85 +52,6 @@ pub type WinitFrame = sctk::shell::xdg::fallback_frame::FallbackFrame<WinitState
 
 // Minimum window inner size.
 const MIN_WINDOW_SIZE: LogicalSize<u32> = LogicalSize::new(2, 1);
-
-#[derive(Debug)]
-pub struct CustomCursor {
-    _file: File,
-    buffer: WlBuffer,
-    w: i32,
-    h: i32,
-    hot_x: i32,
-    hot_y: i32,
-}
-
-impl CustomCursor {
-    fn new(
-        connection: &Connection,
-        shm: &WlShm,
-        bgra_bytes: &[u8],
-        w: i32,
-        h: i32,
-        hot_x: i32,
-        hot_y: i32,
-    ) -> Self {
-        let mfd = memfd::MemfdOptions::default()
-            .close_on_exec(true)
-            .create("winit-custom-cursor")
-            .unwrap();
-        let mut file = mfd.into_file();
-        file.set_len(bgra_bytes.len() as u64).unwrap();
-        file.write_all(bgra_bytes).unwrap();
-        file.flush().unwrap();
-
-        let pool_id = connection
-            .send_request(
-                shm,
-                wl_shm::Request::CreatePool {
-                    size: bgra_bytes.len() as i32,
-                    fd: file.as_fd(),
-                },
-                Some(Arc::new(IgnoreObjectData)),
-            )
-            .unwrap();
-        let shm_pool = WlShmPool::from_id(connection, pool_id).unwrap();
-
-        let buffer_id = connection
-            .send_request(
-                &shm_pool,
-                wl_shm_pool::Request::CreateBuffer {
-                    offset: 0,
-                    width: w,
-                    height: h,
-                    stride: (w * 4),
-                    format: WEnum::Value(Format::Argb8888),
-                },
-                Some(Arc::new(IgnoreObjectData)),
-            )
-            .unwrap();
-        let buffer = WlBuffer::from_id(connection, buffer_id).unwrap();
-
-        CustomCursor {
-            _file: file,
-            buffer,
-            w,
-            h,
-            hot_x,
-            hot_y,
-        }
-    }
-}
-
-#[derive(Debug, Clone, Copy, Eq, PartialEq)]
-enum SelectedCursor {
-    BuiltIn(CursorIcon),
-    Custom(u64),
-}
-
-impl Default for SelectedCursor {
-    fn default() -> Self {
-        Self::BuiltIn(Default::default())
-    }
-}
 
 /// The state of the window which is being updated from the [`WinitState`].
 pub struct WindowState {
@@ -797,43 +711,21 @@ impl WindowState {
         })
     }
 
-    pub fn register_custom_cursor_icon(
-        &mut self,
-        key: u64,
-        png_bytes: Vec<u8>,
-        hot_x: u32,
-        hot_y: u32,
-    ) {
-        let decoder = png::Decoder::new(std::io::Cursor::new(png_bytes));
-
-        let mut reader = decoder.read_info().unwrap();
-        let info = reader.info();
-
-        if info.color_type != png::ColorType::Rgba || info.bit_depth != png::BitDepth::Eight {
-            panic!("Invalid png (8bit rgba required)");
-        }
-
-        let (w, h) = info.size();
-        let mut image: Vec<u8> = Vec::with_capacity(reader.output_buffer_size());
-
-        while let Ok(Some(row)) = reader.next_row() {
-            for chunk in row.data().chunks_exact(4) {
-                // "Each pixel in the cursor is a 32-bit value containing ARGB with A in the high byte"
-                // So it basically wants BGRA and we have RGBA.
-                let mut chunk: [u8; 4] = chunk.try_into().unwrap();
-                chunk.swap(0, 2);
-                image.extend_from_slice(&chunk);
-            }
-        }
+    pub fn register_custom_cursor_icon(&mut self, key: u64, mut image: CursorImage) {
+        // Swap to bgra
+        image
+            .rgba
+            .chunks_exact_mut(4)
+            .for_each(|chunk| chunk.swap(0, 2));
 
         let new_cursor = CustomCursor::new(
             &self.connection,
             &self.shm,
-            &image,
-            w as i32,
-            h as i32,
-            hot_y as i32,
-            hot_x as i32,
+            &image.rgba,
+            image.width as i32,
+            image.height as i32,
+            image.hotspot_x as i32,
+            image.hotspot_y as i32,
         );
         self.custom_cursors.insert(key, Arc::new(new_cursor));
         if self.selected_cursor == SelectedCursor::Custom(key) {
@@ -1283,17 +1175,4 @@ fn into_sctk_adwaita_config(theme: Option<Theme>) -> sctk_adwaita::FrameConfig {
         Some(Theme::Dark) => sctk_adwaita::FrameConfig::dark(),
         None => sctk_adwaita::FrameConfig::auto(),
     }
-}
-
-struct IgnoreObjectData;
-
-impl ObjectData for IgnoreObjectData {
-    fn event(
-        self: Arc<Self>,
-        _: &wayland_client::backend::Backend,
-        _: wayland_client::backend::protocol::Message<wayland_client::backend::ObjectId, OwnedFd>,
-    ) -> Option<Arc<dyn ObjectData>> {
-        None
-    }
-    fn destroyed(&self, _: wayland_client::backend::ObjectId) {}
 }

@@ -14,6 +14,7 @@ use std::{ffi::CStr, mem::MaybeUninit, os::raw::*, sync::Mutex};
 use once_cell::sync::Lazy;
 use smol_str::SmolStr;
 
+use crate::cursor_image::CursorImage;
 #[cfg(x11_platform)]
 use crate::platform::x11::XlibErrorHook;
 use crate::{
@@ -425,14 +426,8 @@ impl Window {
     }
 
     #[inline]
-    pub fn register_custom_cursor_icon(
-        &self,
-        key: u64,
-        png_bytes: Vec<u8>,
-        hot_x: u32,
-        hot_y: u32,
-    ) {
-        x11_or_wayland!(match self; Window(w) => w.register_custom_cursor_icon(key, png_bytes, hot_x, hot_y))
+    pub fn register_custom_cursor_icon(&self, key: u64, image: CursorImage) {
+        x11_or_wayland!(match self; Window(w) => w.register_custom_cursor_icon(key, image))
     }
 
     #[inline]

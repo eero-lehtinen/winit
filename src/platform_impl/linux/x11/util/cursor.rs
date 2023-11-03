@@ -1,9 +1,9 @@
 use core::slice;
-use std::{ffi::CString, io::Cursor};
+use std::ffi::CString;
 
 use x11rb::connection::Connection;
 
-use crate::window::CursorIcon;
+use crate::{cursor_image::CursorImage, window::CursorIcon};
 
 use super::*;
 
@@ -113,34 +113,25 @@ impl XConnection {
         &self,
         window: xproto::Window,
         key: u64,
-        png_bytes: Vec<u8>,
-        hot_x: u32,
-        hot_y: u32,
+        mut image: CursorImage,
     ) {
-        let decoder = png::Decoder::new(Cursor::new(png_bytes));
+        // Swap to bgra
+        image
+            .rgba
+            .chunks_exact_mut(4)
+            .for_each(|chunk| chunk.swap(0, 2));
 
-        let mut reader = decoder.read_info().unwrap();
-        let info = reader.info();
-
-        if info.color_type != png::ColorType::Rgba || info.bit_depth != png::BitDepth::Eight {
-            panic!("Invalid png (8bit rgba required)");
-        }
-
-        let (w, h) = info.size();
-        let mut image: Vec<u8> = Vec::with_capacity(reader.output_buffer_size());
-
-        while let Ok(Some(row)) = reader.next_row() {
-            for chunk in row.data().chunks_exact(4) {
-                // "Each pixel in the cursor is a 32-bit value containing ARGB with A in the high byte"
-                // So it basically wants BGRA and we have RGBA.
-                let mut chunk: [u8; 4] = chunk.try_into().unwrap();
-                chunk.swap(0, 2);
-                image.extend_from_slice(&chunk);
-            }
-        }
-
-        let new_cursor =
-            unsafe { CustomCursor::new(&self.xcursor, self.display, &image, w, h, hot_x, hot_y) };
+        let new_cursor = unsafe {
+            CustomCursor::new(
+                &self.xcursor,
+                self.display,
+                &image.rgba,
+                image.width,
+                image.height,
+                image.hotspot_x,
+                image.hotspot_y,
+            )
+        };
         let mut cursors = self.custom_cursors.lock().unwrap();
         if let Some(cursor) = cursors.get(&key) {
             if *self.selected_cursor.lock().unwrap() == SelectedCursor::Custom(key) {

@@ -15,6 +15,7 @@ use sctk::shell::xdg::window::Window as SctkWindow;
 use sctk::shell::xdg::window::WindowDecorations;
 use sctk::shell::WaylandSurface;
 
+use crate::cursor_image::CursorImage;
 use crate::dpi::{LogicalSize, PhysicalPosition, PhysicalSize, Position, Size};
 use crate::error::{ExternalError, NotSupportedError, OsError as RootOsError};
 use crate::event::{Ime, WindowEvent};
@@ -507,17 +508,11 @@ impl Window {
     }
 
     #[inline]
-    pub fn register_custom_cursor_icon(
-        &self,
-        key: u64,
-        png_bytes: Vec<u8>,
-        hot_x: u32,
-        hot_y: u32,
-    ) {
+    pub fn register_custom_cursor_icon(&self, key: u64, image: CursorImage) {
         self.window_state
             .lock()
             .unwrap()
-            .register_custom_cursor_icon(key, png_bytes, hot_x, hot_y);
+            .register_custom_cursor_icon(key, image);
     }
 
     #[inline]

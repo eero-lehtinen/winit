@@ -18,6 +18,7 @@ use android_activity::{
 use once_cell::sync::Lazy;
 
 use crate::{
+    cursor_image::CursorImage,
     dpi::{PhysicalPosition, PhysicalSize, Position, Size},
     error,
     event::{self, Force, InnerSizeWriter, StartCause},
@@ -906,7 +907,7 @@ impl Window {
 
     pub fn set_cursor_icon(&self, _: window::CursorIcon) {}
 
-    pub fn register_custom_cursor_icon(&self, _: u64, _: Vec<u8>, _: u32, _: u32) {}
+    pub fn register_custom_cursor_icon(&self, _: u64, _: CursorImage) {}
 
     pub fn set_custom_cursor_icon(&self, _: u64) {}
 
