@@ -7,7 +7,7 @@ use std::num::NonZeroU32;
 use std::sync::{Arc, Weak};
 use std::time::Duration;
 
-use ahash::HashMap;
+use ahash::AHashMap;
 use log::{info, warn};
 
 use rustix::fd::{AsFd, OwnedFd};
@@ -70,13 +70,70 @@ pub struct CustomCursor {
     hot_y: i32,
 }
 
+impl CustomCursor {
+    fn new(
+        connection: &Connection,
+        shm: &WlShm,
+        bgra_bytes: &[u8],
+        w: i32,
+        h: i32,
+        hot_x: i32,
+        hot_y: i32,
+    ) -> Self {
+        let mfd = memfd::MemfdOptions::default()
+            .close_on_exec(true)
+            .create("winit-custom-cursor")
+            .unwrap();
+        let mut file = mfd.into_file();
+        file.set_len(bgra_bytes.len() as u64).unwrap();
+        file.write_all(bgra_bytes).unwrap();
+        file.flush().unwrap();
+
+        let pool_id = connection
+            .send_request(
+                shm,
+                wl_shm::Request::CreatePool {
+                    size: bgra_bytes.len() as i32,
+                    fd: file.as_fd(),
+                },
+                Some(Arc::new(IgnoreObjectData)),
+            )
+            .unwrap();
+        let shm_pool = WlShmPool::from_id(connection, pool_id).unwrap();
+
+        let buffer_id = connection
+            .send_request(
+                &shm_pool,
+                wl_shm_pool::Request::CreateBuffer {
+                    offset: 0,
+                    width: w,
+                    height: h,
+                    stride: (w * 4),
+                    format: WEnum::Value(Format::Argb8888),
+                },
+                Some(Arc::new(IgnoreObjectData)),
+            )
+            .unwrap();
+        let buffer = WlBuffer::from_id(connection, buffer_id).unwrap();
+
+        CustomCursor {
+            _file: file,
+            buffer,
+            w,
+            h,
+            hot_x,
+            hot_y,
+        }
+    }
+}
+
 #[derive(Debug, Clone)]
-enum Cursor {
+enum SelectedCursor {
     BuiltIn(CursorIcon),
     Custom(Arc<CustomCursor>),
 }
 
-impl PartialEq for Cursor {
+impl PartialEq for SelectedCursor {
     fn eq(&self, other: &Self) -> bool {
         match (self, other) {
             (Self::BuiltIn(icon), Self::BuiltIn(other_icon)) => icon == other_icon,
@@ -86,9 +143,9 @@ impl PartialEq for Cursor {
     }
 }
 
-impl Eq for Cursor {}
+impl Eq for SelectedCursor {}
 
-impl Default for Cursor {
+impl Default for SelectedCursor {
     fn default() -> Self {
         Self::BuiltIn(Default::default())
     }
@@ -108,18 +165,15 @@ pub struct WindowState {
     /// The `Shm` to set cursor.
     pub shm: WlShm,
 
-    pub custom_cursors: HashMap<u64, Arc<CustomCursor>>,
-
     /// The last received configure.
     pub last_configure: Option<WindowConfigure>,
 
     /// The pointers observed on the window.
     pub pointers: Vec<Weak<ThemedPointer<WinitPointerData>>>,
 
-    /// Cursor icon.
-    pub cursor_icon: CursorIcon,
+    selected_cursor: SelectedCursor,
 
-    cursor: Cursor,
+    pub custom_cursors: AHashMap<u64, Arc<CustomCursor>>,
 
     /// Wether the cursor is visible.
     pub cursor_visible: bool,
@@ -227,9 +281,9 @@ impl WindowState {
             connection,
             csd_fails: false,
             cursor_grab_mode: GrabState::new(),
-            cursor_icon: CursorIcon::default(),
-            cursor: Default::default(),
             cursor_visible: true,
+            selected_cursor: Default::default(),
+            custom_cursors: Default::default(),
             decorate: true,
             fractional_scale,
             frame: None,
@@ -247,7 +301,6 @@ impl WindowState {
             resizable: true,
             scale_factor: 1.,
             shm: winit_state.shm.wl_shm().clone(),
-            custom_cursors: Default::default(),
             size: initial_size.to_logical(1.),
             stateless_size: initial_size.to_logical(1.),
             initial_size: Some(initial_size),
@@ -651,9 +704,9 @@ impl WindowState {
     /// Reload the cursor style on the given window.
     pub fn reload_cursor_style(&mut self) {
         if self.cursor_visible {
-            match &self.cursor {
-                Cursor::BuiltIn(icon) => self.set_cursor(*icon),
-                Cursor::Custom(cursor) => self.set_custom_cursor_impl(cursor.clone()),
+            match &self.selected_cursor {
+                SelectedCursor::BuiltIn(icon) => self.set_cursor(*icon),
+                SelectedCursor::Custom(cursor) => self.set_custom_cursor_impl(cursor.clone()),
             }
         } else {
             self.set_cursor_visible(self.cursor_visible);
@@ -743,7 +796,7 @@ impl WindowState {
     ///
     /// Providing `None` will hide the cursor.
     pub fn set_cursor(&mut self, cursor_icon: CursorIcon) {
-        self.cursor = Cursor::BuiltIn(cursor_icon);
+        self.selected_cursor = SelectedCursor::BuiltIn(cursor_icon);
 
         if !self.cursor_visible {
             return;
@@ -785,55 +838,17 @@ impl WindowState {
             }
         }
 
-        let mfd = memfd::MemfdOptions::default()
-            .close_on_exec(true)
-            .create("winit-custom-cursor")
-            .unwrap();
-        let mut file = mfd.into_file();
-        let _ = file.set_len(image.len() as u64);
-        file.write_all(&image).unwrap();
-        file.flush().unwrap();
-
-        let pool_id = self
-            .connection
-            .send_request(
-                &self.shm,
-                wl_shm::Request::CreatePool {
-                    size: image.len() as i32,
-                    fd: file.as_fd(),
-                },
-                Some(Arc::new(IgnoreObjectData)),
-            )
-            .unwrap();
-        let shm_pool = WlShmPool::from_id(&self.connection, pool_id).unwrap();
-
-        let buffer_id = self
-            .connection
-            .send_request(
-                &shm_pool,
-                wl_shm_pool::Request::CreateBuffer {
-                    offset: 0,
-                    width: w,
-                    height: h,
-                    stride: (w * 4),
-                    format: WEnum::Value(Format::Argb8888),
-                },
-                Some(Arc::new(IgnoreObjectData)),
-            )
-            .unwrap();
-
-        let buffer = WlBuffer::from_id(&self.connection, buffer_id).unwrap();
-
         self.custom_cursors.insert(
             key,
-            Arc::new(CustomCursor {
-                _file: file,
-                buffer,
+            Arc::new(CustomCursor::new(
+                &self.connection,
+                &self.shm,
+                &image,
                 w,
                 h,
-                hot_x: hot_x as i32,
-                hot_y: hot_y as i32,
-            }),
+                hot_y as i32,
+                hot_x as i32,
+            )),
         );
     }
 
@@ -841,7 +856,7 @@ impl WindowState {
         let Some(cursor) = self.custom_cursors.get(&key) else {
             return;
         };
-        self.cursor = Cursor::Custom(cursor.clone());
+        self.selected_cursor = SelectedCursor::Custom(cursor.clone());
 
         if !self.cursor_visible {
             return;
@@ -1014,9 +1029,9 @@ impl WindowState {
         self.cursor_visible = cursor_visible;
 
         if self.cursor_visible {
-            match &self.cursor {
-                Cursor::BuiltIn(icon) => self.set_cursor(*icon),
-                Cursor::Custom(cursor) => self.set_custom_cursor_impl(cursor.clone()),
+            match &self.selected_cursor {
+                SelectedCursor::BuiltIn(icon) => self.set_cursor(*icon),
+                SelectedCursor::Custom(cursor) => self.set_custom_cursor_impl(cursor.clone()),
             }
         } else {
             for pointer in self.pointers.iter().filter_map(|pointer| pointer.upgrade()) {
