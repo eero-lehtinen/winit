@@ -1,7 +1,7 @@
 //! The state of the window, which is shared with the event-loop.
 
 use std::fs::File;
-use std::io::{Seek, SeekFrom, Write};
+use std::io::Write;
 use std::mem::ManuallyDrop;
 use std::num::NonZeroU32;
 use std::sync::{Arc, Weak};
@@ -23,7 +23,7 @@ use sctk::reexports::protocols::wp::text_input::zv3::client::zwp_text_input_v3::
 use sctk::reexports::protocols::wp::viewporter::client::wp_viewport::WpViewport;
 use sctk::reexports::protocols::xdg::shell::client::xdg_toplevel::ResizeEdge as XdgResizeEdge;
 
-use sctk::compositor::{CompositorState, Region, SurfaceData, SurfaceDataExt};
+use sctk::compositor::{CompositorState, Region};
 use sctk::seat::pointer::{PointerDataExt, ThemedPointer};
 use sctk::shell::xdg::window::{DecorationMode, Window, WindowConfigure};
 use sctk::shell::xdg::XdgSurface;
@@ -61,18 +61,32 @@ pub type WinitFrame = sctk::shell::xdg::fallback_frame::FallbackFrame<WinitState
 const MIN_WINDOW_SIZE: LogicalSize<u32> = LogicalSize::new(2, 1);
 
 #[derive(Debug)]
-pub struct CustomCursorData {
-    pool: WlShmPool,
-    pool_size: i32,
-    file: File,
-    map: HashMap<u64, (WlBuffer, i32, i32, i32, i32)>,
+pub struct CustomCursor {
+    _file: File,
+    buffer: WlBuffer,
+    w: i32,
+    h: i32,
+    hot_x: i32,
+    hot_y: i32,
 }
 
-#[derive(Debug, Copy, Clone, PartialEq, Eq, Hash)]
+#[derive(Debug, Clone)]
 enum Cursor {
     BuiltIn(CursorIcon),
-    Custom(u64),
+    Custom(Arc<CustomCursor>),
 }
+
+impl PartialEq for Cursor {
+    fn eq(&self, other: &Self) -> bool {
+        match (self, other) {
+            (Self::BuiltIn(icon), Self::BuiltIn(other_icon)) => icon == other_icon,
+            (Self::Custom(cursor), Self::Custom(other_cursor)) => Arc::ptr_eq(cursor, other_cursor),
+            _ => false,
+        }
+    }
+}
+
+impl Eq for Cursor {}
 
 impl Default for Cursor {
     fn default() -> Self {
@@ -94,7 +108,7 @@ pub struct WindowState {
     /// The `Shm` to set cursor.
     pub shm: WlShm,
 
-    pub custom_cursor_data: CustomCursorData,
+    pub custom_cursors: HashMap<u64, Arc<CustomCursor>>,
 
     /// The last received configure.
     pub last_configure: Option<WindowConfigure>,
@@ -206,35 +220,6 @@ impl WindowState {
             .as_ref()
             .map(|fsm| fsm.fractional_scaling(window.wl_surface(), queue_handle));
 
-        let shm = winit_state.shm.wl_shm().clone();
-
-        const INITIAL_POOL_SIZE: i32 = 16 * 16 * 4;
-
-        let mfd = memfd::MemfdOptions::default()
-            .allow_sealing(true)
-            .close_on_exec(true)
-            .create("custom-cursor-xd")
-            .unwrap();
-
-        let _ = mfd.as_file().set_len(INITIAL_POOL_SIZE as u64);
-
-        let mut file = mfd.into_file();
-
-        file.write_all(&[0; INITIAL_POOL_SIZE as usize]).unwrap();
-        file.flush().unwrap();
-
-        let pool_id = connection
-            .send_request(
-                &shm,
-                wl_shm::Request::CreatePool {
-                    size: INITIAL_POOL_SIZE,
-                    fd: file.as_fd(),
-                },
-                Some(Arc::new(IgnoreObjectData)),
-            )
-            .unwrap();
-        let shm_pool = WlShmPool::from_id(&connection, pool_id).unwrap();
-
         Self {
             blur: None,
             blur_manager: winit_state.kwin_blur_manager.clone(),
@@ -261,13 +246,8 @@ impl WindowState {
             queue_handle: queue_handle.clone(),
             resizable: true,
             scale_factor: 1.,
-            shm,
-            custom_cursor_data: CustomCursorData {
-                pool: shm_pool,
-                pool_size: INITIAL_POOL_SIZE,
-                file,
-                map: Default::default(),
-            },
+            shm: winit_state.shm.wl_shm().clone(),
+            custom_cursors: Default::default(),
             size: initial_size.to_logical(1.),
             stateless_size: initial_size.to_logical(1.),
             initial_size: Some(initial_size),
@@ -671,9 +651,9 @@ impl WindowState {
     /// Reload the cursor style on the given window.
     pub fn reload_cursor_style(&mut self) {
         if self.cursor_visible {
-            match self.cursor {
-                Cursor::BuiltIn(icon) => self.set_cursor(icon),
-                Cursor::Custom(key) => self.set_custom_cursor(key),
+            match &self.cursor {
+                Cursor::BuiltIn(icon) => self.set_cursor(*icon),
+                Cursor::Custom(cursor) => self.set_custom_cursor_impl(cursor.clone()),
             }
         } else {
             self.set_cursor_visible(self.cursor_visible);
@@ -776,7 +756,13 @@ impl WindowState {
         })
     }
 
-    pub fn register_custom_cursor_icon(&mut self, key: u64, png_bytes: Vec<u8>, hx: u32, hy: u32) {
+    pub fn register_custom_cursor_icon(
+        &mut self,
+        key: u64,
+        png_bytes: Vec<u8>,
+        hot_x: u32,
+        hot_y: u32,
+    ) {
         let decoder = png::Decoder::new(std::io::Cursor::new(png_bytes));
 
         let mut reader = decoder.read_info().unwrap();
@@ -799,29 +785,34 @@ impl WindowState {
             }
         }
 
-        let buf = &image;
-        let offset = self.custom_cursor_data.file.seek(SeekFrom::End(0)).unwrap();
+        let mfd = memfd::MemfdOptions::default()
+            .close_on_exec(true)
+            .create("winit-custom-cursor")
+            .unwrap();
+        let mut file = mfd.into_file();
+        let _ = file.set_len(image.len() as u64);
+        file.write_all(&image).unwrap();
+        file.flush().unwrap();
 
-        let new_size = offset + buf.len() as u64;
-
-        let size = new_size as i32;
-        if size > self.custom_cursor_data.pool_size {
-            self.custom_cursor_data
-                .file
-                .set_len(size as u64)
-                .expect("Failed to set new buffer length");
-            self.custom_cursor_data.pool.resize(size);
-            self.custom_cursor_data.pool_size = size;
-        }
-
-        self.custom_cursor_data.file.write_all(buf).unwrap();
+        let pool_id = self
+            .connection
+            .send_request(
+                &self.shm,
+                wl_shm::Request::CreatePool {
+                    size: image.len() as i32,
+                    fd: file.as_fd(),
+                },
+                Some(Arc::new(IgnoreObjectData)),
+            )
+            .unwrap();
+        let shm_pool = WlShmPool::from_id(&self.connection, pool_id).unwrap();
 
         let buffer_id = self
             .connection
             .send_request(
-                &self.custom_cursor_data.pool,
+                &shm_pool,
                 wl_shm_pool::Request::CreateBuffer {
-                    offset: offset as i32,
+                    offset: 0,
                     width: w,
                     height: h,
                     stride: (w * 4),
@@ -833,36 +824,47 @@ impl WindowState {
 
         let buffer = WlBuffer::from_id(&self.connection, buffer_id).unwrap();
 
-        self.custom_cursor_data
-            .map
-            .insert(key, (buffer, w, h, hx as i32, hy as i32));
+        self.custom_cursors.insert(
+            key,
+            Arc::new(CustomCursor {
+                _file: file,
+                buffer,
+                w,
+                h,
+                hot_x: hot_x as i32,
+                hot_y: hot_y as i32,
+            }),
+        );
     }
 
     pub fn set_custom_cursor(&mut self, key: u64) {
-        self.cursor = Cursor::Custom(key);
+        let Some(cursor) = self.custom_cursors.get(&key) else {
+            return;
+        };
+        self.cursor = Cursor::Custom(cursor.clone());
 
         if !self.cursor_visible {
             return;
         }
+        self.set_custom_cursor_impl(cursor.clone());
+    }
 
-        let Some((buffer, w, h, hx, hy)) = self.custom_cursor_data.map.get(&key) else {
-            return;
-        };
+    fn set_custom_cursor_impl(&mut self, cursor: Arc<CustomCursor>) {
         self.apply_on_poiner(|pointer, _| {
             let surface = pointer.surface();
 
-            let scale = surface
-                .data::<SurfaceData>()
-                .unwrap()
-                .surface_data()
-                .scale_factor();
+            // Scale chould be used to get pixel perfect results, but would require additional images
+            // for larger scales.
+            //
+            // let scale = surface
+            //     .data::<SurfaceData>()
+            //     .unwrap()
+            //     .surface_data()
+            //     .scale_factor();
 
-            surface.set_buffer_scale(scale);
-
-            surface.attach(Some(buffer), 0, 0);
-
-            surface.damage_buffer(0, 0, *w, *h);
-
+            surface.set_buffer_scale(1);
+            surface.attach(Some(&cursor.buffer), 0, 0);
+            surface.damage_buffer(0, 0, cursor.w, cursor.h);
             surface.commit();
 
             let serial = pointer
@@ -874,7 +876,7 @@ impl WindowState {
             // Set the pointer surface to change the pointer.
             pointer
                 .pointer()
-                .set_cursor(serial, Some(surface), *hx / scale, *hy / scale);
+                .set_cursor(serial, Some(surface), cursor.hot_x, cursor.hot_y);
         })
     }
 
@@ -1012,9 +1014,9 @@ impl WindowState {
         self.cursor_visible = cursor_visible;
 
         if self.cursor_visible {
-            match self.cursor {
-                Cursor::BuiltIn(icon) => self.set_cursor(icon),
-                Cursor::Custom(key) => self.set_custom_cursor(key),
+            match &self.cursor {
+                Cursor::BuiltIn(icon) => self.set_cursor(*icon),
+                Cursor::Custom(cursor) => self.set_custom_cursor_impl(cursor.clone()),
             }
         } else {
             for pointer in self.pointers.iter().filter_map(|pointer| pointer.upgrade()) {
