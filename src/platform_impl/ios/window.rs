@@ -178,7 +178,7 @@ impl Inner {
         debug!("`Window::set_cursor_icon` ignored on iOS")
     }
 
-    pub fn register_custom_cursor_icon(&self, _: u64, _: CursorImage, _: u32, _: u32) {
+    pub fn register_custom_cursor_icon(&self, _: u64, _: CursorImage) {
         debug!("`Window::register_custom_cursor_icon` ignored on iOS")
     }
 

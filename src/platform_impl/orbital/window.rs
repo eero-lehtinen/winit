@@ -353,7 +353,7 @@ impl Window {
     #[inline]
     pub fn set_cursor_icon(&self, _: window::CursorIcon) {}
 
-    pub fn register_custom_cursor_icon(&self, _: u64, _: RgbaIcon, _: u32, _: u32) {}
+    pub fn register_custom_cursor_icon(&self, _: u64, _: CursorImage) {}
 
     pub fn set_custom_cursor_icon(&self, _: u64) {}
 
