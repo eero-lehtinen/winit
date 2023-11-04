@@ -22,12 +22,24 @@ pub struct Window {
     inner: Dispatcher<Inner>,
 }
 
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum SelectedCursor {
+    BuiltIn(CursorIcon),
+    Custom(u64),
+}
+
+impl Default for SelectedCursor {
+    fn default() -> Self {
+        SelectedCursor::BuiltIn(Default::default())
+    }
+}
+
 pub struct Inner {
     id: WindowId,
     pub window: web_sys::Window,
     canvas: Rc<RefCell<backend::Canvas>>,
-    selected_cursor: RefCell<Rc<str>>,
-    custom_cursors: RefCell<HashMap<u64, Rc<str>>>,
+    selected_cursor: RefCell<SelectedCursor>,
+    custom_cursors: RefCell<HashMap<u64, String>>,
     destroy_fn: Option<Box<dyn FnOnce()>>,
 }
 
@@ -56,7 +68,7 @@ impl Window {
             id,
             window: window.clone(),
             canvas,
-            selected_cursor: RefCell::new("auto".into()),
+            selected_cursor: Default::default(),
             custom_cursors: Default::default(),
             destroy_fn: Some(destroy_fn),
         };
@@ -199,7 +211,7 @@ impl Inner {
 
     #[inline]
     pub fn set_cursor_icon(&self, cursor: CursorIcon) {
-        *self.selected_cursor.borrow_mut() = cursor.name().into();
+        *self.selected_cursor.borrow_mut() = SelectedCursor::BuiltIn(cursor);
         if let Some(s) = backend::get_canvas_style_property(self.canvas.borrow().raw(), "cursor") {
             if s == "none" {
                 return;
@@ -247,9 +259,12 @@ impl Inner {
         let pointer = format!(
             "url({data_url}) {} {}, auto",
             image.hotspot_x, image.hotspot_y,
-        )
-        .into();
+        );
         self.custom_cursors.borrow_mut().insert(key, pointer);
+        let selected = *self.selected_cursor.borrow();
+        if let SelectedCursor::Custom(key) = selected {
+            self.set_custom_cursor_icon(key);
+        }
     }
 
     #[inline]
@@ -257,7 +272,7 @@ impl Inner {
         let Some(pointer) = self.custom_cursors.borrow().get(&key).cloned() else {
             return;
         };
-        *self.selected_cursor.borrow_mut() = pointer.clone();
+        *self.selected_cursor.borrow_mut() = SelectedCursor::Custom(key);
         if let Some(s) = backend::get_canvas_style_property(self.canvas.borrow().raw(), "cursor") {
             if s == "none" {
                 return;
@@ -292,11 +307,18 @@ impl Inner {
         if !visible {
             backend::set_canvas_style_property(self.canvas.borrow().raw(), "cursor", "none");
         } else {
-            backend::set_canvas_style_property(
-                self.canvas.borrow().raw(),
-                "cursor",
-                &self.selected_cursor.borrow(),
-            );
+            let custom_cursors = self.custom_cursors.borrow();
+            let name = match *self.selected_cursor.borrow() {
+                SelectedCursor::BuiltIn(cursor) => cursor.name(),
+                SelectedCursor::Custom(key) => {
+                    if let Some(data) = custom_cursors.get(&key) {
+                        data
+                    } else {
+                        CursorIcon::default().name()
+                    }
+                }
+            };
+            backend::set_canvas_style_property(self.canvas.borrow().raw(), "cursor", name);
         }
     }
 
