@@ -30,9 +30,6 @@ extern_class!(
     }
 );
 
-unsafe impl Send for NSBitmapImageRep {}
-unsafe impl Sync for NSBitmapImageRep {}
-
 extern_methods!(
     unsafe impl NSBitmapImageRep {
         pub fn init_rgba(width: NSInteger, height: NSInteger) -> Id<Self> {
