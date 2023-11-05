@@ -101,7 +101,7 @@ use runner::{EventLoopRunner, EventLoopRunnerShared};
 
 use self::runner::RunnerState;
 
-use super::{window::set_skip_taskbar, window_state::UseCursor};
+use super::{window::set_skip_taskbar, window_state::SelectedCursor};
 
 type GetPointerFrameInfoHistory = unsafe extern "system" fn(
     pointerId: u32,
@@ -2005,37 +2005,30 @@ unsafe fn public_window_callback_inner<T: 'static>(
         }
 
         WM_SETCURSOR => {
-            let set_cursor_to = {
-                let window_state = userdata.window_state_lock();
-                // The return value for the preceding `WM_NCHITTEST` message is conveniently
-                // provided through the low-order word of lParam. We use that here since
-                // `WM_MOUSEMOVE` seems to come after `WM_SETCURSOR` for a given cursor movement.
-                let in_client_area = super::loword(lparam as u32) as u32 == HTCLIENT;
-                if in_client_area {
-                    Some(window_state.mouse.use_cursor)
-                } else {
-                    None
-                }
-            };
-
-            match set_cursor_to {
-                Some(cursor) => match cursor {
-                    UseCursor::BuiltIn(cursor) => {
-                        let cursor = unsafe { LoadCursorW(0, util::to_windows_cursor(cursor)) };
-                        unsafe { SetCursor(cursor) };
-                        result = ProcResult::Value(0);
-                    }
-                    UseCursor::Custom(key) => {
-                        let state = userdata.window_state_lock();
-                        if let Some(cursor) = state.mouse.custom_cursors.get(&key) {
-                            unsafe { SetCursor(cursor.as_raw_handle()) };
-                            result = ProcResult::Value(0);
+            let window_state = userdata.window_state_lock();
+            // The return value for the preceding `WM_NCHITTEST` message is conveniently
+            // provided through the low-order word of lParam. We use that here since
+            // `WM_MOUSEMOVE` seems to come after `WM_SETCURSOR` for a given cursor movement.
+            let in_client_area = super::loword(lparam as u32) as u32 == HTCLIENT;
+            if !in_client_area {
+                // No cursor
+                result = ProcResult::DefWindowProc(wparam);
+            } else {
+                let cursor = match window_state.mouse.selected_cursor {
+                    SelectedCursor::BuiltIn(cursor_icon) => unsafe {
+                        LoadCursorW(0, util::to_windows_cursor(cursor_icon))
+                    },
+                    SelectedCursor::Custom(key) => {
+                        if let Some(icon) = window_state.mouse.custom_cursors.get(&key) {
+                            icon.as_raw_handle()
                         } else {
-                            result = ProcResult::DefWindowProc(wparam);
+                            // Should never happen but we can just set the default cursor
+                            unsafe { LoadCursorW(0, util::to_windows_cursor(Default::default())) }
                         }
                     }
-                },
-                None => result = ProcResult::DefWindowProc(wparam),
+                };
+                unsafe { SetCursor(cursor) };
+                result = ProcResult::Value(0);
             }
         }
 

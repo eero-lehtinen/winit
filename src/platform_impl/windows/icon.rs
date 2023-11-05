@@ -1,18 +1,19 @@
-use std::{fmt, io, mem, path::Path, sync::Arc};
+use std::{ffi::c_void, fmt, io, mem, path::Path, sync::Arc};
 
 use windows_sys::{
     core::PCWSTR,
     Win32::{
         Foundation::HWND,
+        Graphics::Gdi::{CreateBitmap, CreateCompatibleBitmap, GetDC, ReleaseDC, SetBitmapBits},
         UI::WindowsAndMessaging::{
-            CreateIcon, DestroyIcon, LoadImageW, SendMessageW, HICON, ICON_BIG, ICON_SMALL,
-            IMAGE_ICON, LR_DEFAULTSIZE, LR_LOADFROMFILE, WM_SETICON,
+            CreateIcon, CreateIconIndirect, DestroyIcon, LoadImageW, SendMessageW, HICON, ICONINFO,
+            ICON_BIG, ICON_SMALL, IMAGE_ICON, LR_DEFAULTSIZE, LR_LOADFROMFILE, WM_SETICON,
         },
     },
 };
 
-use crate::dpi::PhysicalSize;
 use crate::icon::*;
+use crate::{cursor_image::CursorImage, dpi::PhysicalSize};
 
 use super::util;
 
@@ -140,6 +141,62 @@ impl WinIcon {
         Self {
             inner: Arc::new(RaiiIcon { handle }),
         }
+    }
+
+    pub fn new_cursor(mut icon: CursorImage) -> Self {
+        // Swap to bgra
+        icon.rgba
+            .chunks_exact_mut(4)
+            .for_each(|chunk| chunk.swap(0, 2));
+
+        let image = &icon.rgba;
+        let w = icon.width;
+        let h = icon.height;
+        let hot_x = icon.hotspot_x;
+        let hot_y = icon.hotspot_y;
+
+        let handle = unsafe {
+            let mask_bits: Vec<u8> = vec![0xff; (((w + 15) >> 3) * h) as usize];
+            let hbm_mask = CreateBitmap(w as i32, h as i32, 1, 1, mask_bits.as_ptr() as *const _);
+            if hbm_mask == 0 {
+                panic!("Failed to create mask bitmap");
+            }
+
+            let hdc_screen = GetDC(0);
+            if hdc_screen == 0 {
+                panic!("Failed to get screen DC");
+            }
+
+            let hbm_color = CreateCompatibleBitmap(hdc_screen, w as i32, h as i32);
+
+            if hbm_color == 0 {
+                panic!("Failed to create color bitmap");
+            }
+
+            SetBitmapBits(
+                hbm_color,
+                image.len() as u32,
+                image.as_ptr() as *const c_void,
+            );
+
+            ReleaseDC(0, hdc_screen);
+
+            let icon_info = ICONINFO {
+                fIcon: 0,
+                xHotspot: hot_x,
+                yHotspot: hot_y,
+                hbmMask: hbm_mask,
+                hbmColor: hbm_color,
+            };
+
+            CreateIconIndirect(&icon_info as *const _)
+        };
+
+        if handle == 0 {
+            panic!("Failed to create icon");
+        }
+
+        WinIcon::from_handle(handle)
     }
 }
 

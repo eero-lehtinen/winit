@@ -16,9 +16,8 @@ use windows_sys::Win32::{
     Graphics::{
         Dwm::{DwmEnableBlurBehindWindow, DWM_BB_BLURREGION, DWM_BB_ENABLE, DWM_BLURBEHIND},
         Gdi::{
-            ChangeDisplaySettingsExW, ClientToScreen, CreateBitmap, CreateCompatibleBitmap,
-            CreateRectRgn, DeleteObject, GetDC, InvalidateRgn, RedrawWindow, ReleaseDC,
-            SetBitmapBits, CDS_FULLSCREEN, DISP_CHANGE_BADFLAGS, DISP_CHANGE_BADMODE,
+            ChangeDisplaySettingsExW, ClientToScreen, CreateRectRgn, DeleteObject, InvalidateRgn,
+            RedrawWindow, CDS_FULLSCREEN, DISP_CHANGE_BADFLAGS, DISP_CHANGE_BADMODE,
             DISP_CHANGE_BADPARAM, DISP_CHANGE_FAILED, DISP_CHANGE_SUCCESSFUL, RDW_INTERNALPAINT,
         },
     },
@@ -38,27 +37,28 @@ use windows_sys::Win32::{
             Touch::{RegisterTouchWindow, TWF_WANTPALM},
         },
         WindowsAndMessaging::{
-            CreateIconIndirect, CreateWindowExW, EnableMenuItem, FlashWindowEx, GetClientRect,
-            GetCursorPos, GetForegroundWindow, GetSystemMenu, GetSystemMetrics, GetWindowPlacement,
+            CreateWindowExW, EnableMenuItem, FlashWindowEx, GetClientRect, GetCursorPos,
+            GetForegroundWindow, GetSystemMenu, GetSystemMetrics, GetWindowPlacement,
             GetWindowTextLengthW, GetWindowTextW, IsWindowVisible, LoadCursorW, PeekMessageW,
             PostMessageW, RegisterClassExW, SetCursor, SetCursorPos, SetForegroundWindow,
             SetMenuDefaultItem, SetWindowDisplayAffinity, SetWindowPlacement, SetWindowPos,
             SetWindowTextW, TrackPopupMenu, CS_HREDRAW, CS_VREDRAW, CW_USEDEFAULT, FLASHWINFO,
             FLASHW_ALL, FLASHW_STOP, FLASHW_TIMERNOFG, FLASHW_TRAY, GWLP_HINSTANCE, HTBOTTOM,
             HTBOTTOMLEFT, HTBOTTOMRIGHT, HTCAPTION, HTLEFT, HTRIGHT, HTTOP, HTTOPLEFT, HTTOPRIGHT,
-            ICONINFO, MENU_ITEM_STATE, MFS_DISABLED, MFS_ENABLED, MF_BYCOMMAND, NID_READY,
-            PM_NOREMOVE, SC_CLOSE, SC_MAXIMIZE, SC_MINIMIZE, SC_MOVE, SC_RESTORE, SC_SIZE,
-            SM_DIGITIZER, SWP_ASYNCWINDOWPOS, SWP_NOACTIVATE, SWP_NOSIZE, SWP_NOZORDER,
-            TPM_LEFTALIGN, TPM_RETURNCMD, WDA_EXCLUDEFROMCAPTURE, WDA_NONE, WM_NCLBUTTONDOWN,
-            WM_SYSCOMMAND, WNDCLASSEXW,
+            MENU_ITEM_STATE, MFS_DISABLED, MFS_ENABLED, MF_BYCOMMAND, NID_READY, PM_NOREMOVE,
+            SC_CLOSE, SC_MAXIMIZE, SC_MINIMIZE, SC_MOVE, SC_RESTORE, SC_SIZE, SM_DIGITIZER,
+            SWP_ASYNCWINDOWPOS, SWP_NOACTIVATE, SWP_NOSIZE, SWP_NOZORDER, TPM_LEFTALIGN,
+            TPM_RETURNCMD, WDA_EXCLUDEFROMCAPTURE, WDA_NONE, WM_NCLBUTTONDOWN, WM_SYSCOMMAND,
+            WNDCLASSEXW,
         },
     },
 };
 
 use crate::{
+    cursor_image::CursorImage,
     dpi::{PhysicalPosition, PhysicalSize, Position, Size},
     error::{ExternalError, NotSupportedError, OsError as RootOsError},
-    icon::{Icon, RgbaIcon},
+    icon::Icon,
     platform_impl::platform::{
         dark_mode::try_theme,
         definitions::{
@@ -410,66 +410,13 @@ impl Window {
     }
 
     #[inline]
-    pub fn register_custom_cursor_icon(&self, key: u64, mut icon: CursorImage) {
-        // Swap to bgra
-        icon.rgba
-            .chunks_exact_mut(4)
-            .for_each(|chunk| chunk.swap(0, 2));
-
-        let image = &icon.rgba;
-        let w = icon.width;
-        let h = icon.height;
-        let hot_x = icon.hotspot_x as i32;
-        let hot_y = icon.hotspot_y as i32;
-
-        let handle = unsafe {
-            // always visible for each pixel
-            let mask_bits: Vec<u8> = vec![0xff; (((w + 15) >> 3) * h) as usize];
-            let hbm_mask = CreateBitmap(w as i32, h as i32, 1, 1, mask_bits.as_ptr() as *const _);
-            if hbm_mask == 0 {
-                panic!("Failed to create mask bitmap");
-            }
-
-            let hdc_screen = GetDC(0);
-            if hdc_screen == 0 {
-                panic!("Failed to get screen DC");
-            }
-
-            let hbm_color = CreateCompatibleBitmap(hdc_screen, w as i32, h as i32);
-
-            if hbm_color == 0 {
-                panic!("Failed to create color bitmap");
-            }
-
-            SetBitmapBits(
-                hbm_color,
-                image.len() as u32,
-                image.as_ptr() as *const c_void,
-            );
-
-            ReleaseDC(0, hdc_screen);
-
-            let icon_info = ICONINFO {
-                fIcon: 0,
-                xHotspot: hot_x,
-                yHotspot: hot_y,
-                hbmMask: hbm_mask,
-                hbmColor: hbm_color,
-            };
-
-            CreateIconIndirect(&icon_info as *const _)
-        };
-
-        if handle == 0 {
-            panic!("Failed to create icon");
-        }
-
-        let cursor = WinIcon::from_handle(handle);
-
+    pub fn register_custom_cursor_icon(&self, key: u64, icon: CursorImage) {
+        let cursor = WinIcon::new_cursor(icon);
         let mut state = self.window_state_lock();
         state.mouse.custom_cursors.insert(key, cursor);
-
-        if state.mouse.selected_cursor == SelectedCursor::Custom(key) {
+        let selected = state.mouse.selected_cursor;
+        drop(state);
+        if selected == SelectedCursor::Custom(key) {
             self.set_custom_cursor_icon(key);
         }
     }
