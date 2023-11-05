@@ -18,6 +18,7 @@ fn decode_cursor_image(bytes: &[u8]) -> CursorImage {
     CursorImage::from_rgba(samples.samples, w, h, w / 2, h / 2).unwrap()
 }
 
+#[cfg(not(wasm_platform))]
 #[path = "util/fill.rs"]
 mod fill;
 

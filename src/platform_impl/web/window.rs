@@ -231,7 +231,6 @@ impl Inner {
             .dyn_into::<HtmlCanvasElement>()
             .unwrap();
 
-        cursor_icon_canvas.set_hidden(true);
         #[allow(clippy::disallowed_methods)]
         cursor_icon_canvas.set_width(image.width);
         #[allow(clippy::disallowed_methods)]
