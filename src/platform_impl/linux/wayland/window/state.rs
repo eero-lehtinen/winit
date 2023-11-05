@@ -727,10 +727,14 @@ impl WindowState {
             image.hotspot_x as i32,
             image.hotspot_y as i32,
         );
-        self.custom_cursors.insert(key, Arc::new(new_cursor));
-        if self.selected_cursor == SelectedCursor::Custom(key) {
-            self.set_custom_cursor(key);
+
+        if let Some(old_cursor) = self.custom_cursors.remove(&key) {
+            if self.selected_cursor == SelectedCursor::Custom(key) {
+                self.set_custom_cursor(key);
+            }
+            old_cursor.destroy(&self.connection);
         }
+        self.custom_cursors.insert(key, Arc::new(new_cursor));
     }
 
     pub fn set_custom_cursor(&mut self, key: u64) {
@@ -753,6 +757,7 @@ impl WindowState {
             //     .unwrap()
             //     .surface_data()
             //     .scale_factor();
+            // surface.set_buffer_scale(scale);
 
             surface.set_buffer_scale(1);
             surface.attach(Some(&cursor.buffer), 0, 0);

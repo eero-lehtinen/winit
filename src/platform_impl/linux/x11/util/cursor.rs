@@ -42,6 +42,12 @@ impl CustomCursor {
             CustomCursor(cursor)
         }
     }
+
+    unsafe fn destroy(&self, xlib: &ffi::Xlib, display: *mut ffi::Display) {
+        unsafe {
+            (xlib.XFreeCursor)(display, self.0);
+        }
+    }
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -133,12 +139,12 @@ impl XConnection {
             )
         };
         let mut cursors = self.custom_cursors.lock().unwrap();
-        if let Some(cursor) = cursors.get(&key) {
+        if let Some(old_cursor) = cursors.remove(&key) {
             if *self.selected_cursor.lock().unwrap() == SelectedCursor::Custom(key) {
                 self.update_cursor(window, new_cursor.0).unwrap();
             }
             unsafe {
-                (self.xlib.XFreeCursor)(self.display, cursor.0);
+                old_cursor.destroy(&self.xlib, self.display);
             }
         }
         cursors.insert(key, new_cursor);

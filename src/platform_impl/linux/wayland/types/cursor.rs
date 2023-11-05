@@ -5,7 +5,7 @@ use rustix::fd::{AsFd, OwnedFd};
 use wayland_backend::client::ObjectData;
 use wayland_client::{
     protocol::{
-        wl_buffer::WlBuffer,
+        wl_buffer::{self, WlBuffer},
         wl_shm::{self, Format, WlShm},
         wl_shm_pool::{self, WlShmPool},
     },
@@ -15,6 +15,7 @@ use wayland_client::{
 #[derive(Debug)]
 pub struct CustomCursor {
     _file: File,
+    shm_pool: WlShmPool,
     pub buffer: WlBuffer,
     pub w: i32,
     pub h: i32,
@@ -70,12 +71,22 @@ impl CustomCursor {
 
         CustomCursor {
             _file: file,
+            shm_pool,
             buffer,
             w,
             h,
             hot_x,
             hot_y,
         }
+    }
+
+    pub fn destroy(&self, connection: &Connection) {
+        connection
+            .send_request(&self.buffer, wl_buffer::Request::Destroy, None)
+            .unwrap();
+        connection
+            .send_request(&self.shm_pool, wl_shm_pool::Request::Destroy, None)
+            .unwrap();
     }
 }
 
