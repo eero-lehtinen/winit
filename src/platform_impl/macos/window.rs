@@ -857,8 +857,6 @@ impl WinitWindow {
     pub fn register_custom_cursor_icon(&self, key: u64, cursor_image: CursorImage) {
         let w = cursor_image.width;
         let h = cursor_image.height;
-        let hot_x = cursor_image.hotspot_x;
-        let hot_y = cursor_image.hotspot_y;
 
         let bitmap = NSBitmapImageRep::init_rgba(w as isize, h as isize);
         let bitmap_data =
@@ -867,7 +865,12 @@ impl WinitWindow {
 
         let image = NSImage::init_with_size(NSSize::new(w.into(), h.into()));
         image.add_representation(&bitmap);
-        let cursor = NSCursor::new(&image, NSPoint::new(hot_x as f64, hot_y as f64));
+
+        let cursor = NSCursor::new(
+            &image,
+            NSPoint::new(cursor_image.hotspot_x as f64, cursor_image.hotspot_y as f64),
+        );
+
         let mut state = self.shared_state.lock().unwrap();
         state.custom_cursors.insert(key, cursor);
         let selected_cursor = state.selected_cursor;
