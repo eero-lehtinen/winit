@@ -1,4 +1,3 @@
-use crate::cursor_image::CursorImage;
 use crate::dpi::{PhysicalPosition, PhysicalSize, Position, Size};
 use crate::error::{ExternalError, NotSupportedError, OsError as RootOE};
 use crate::icon::Icon;
@@ -8,24 +7,24 @@ use crate::window::{
 };
 use crate::SendSyncWrapper;
 
-use wasm_bindgen::{Clamped, JsCast};
-use web_sys::{CanvasRenderingContext2d, HtmlCanvasElement};
+use web_sys::HtmlCanvasElement;
 
+use super::custom_cursor::WebCustomCursor;
 use super::r#async::Dispatcher;
 use super::{backend, monitor::MonitorHandle, EventLoopWindowTarget, Fullscreen};
 
 use std::cell::RefCell;
-use std::collections::{HashMap, VecDeque};
+use std::collections::VecDeque;
 use std::rc::Rc;
 
 pub struct Window {
     inner: Dispatcher<Inner>,
 }
 
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+#[derive(Debug, Clone)]
 pub enum SelectedCursor {
     BuiltIn(CursorIcon),
-    Custom(u64),
+    Custom(WebCustomCursor),
 }
 
 impl Default for SelectedCursor {
@@ -39,7 +38,6 @@ pub struct Inner {
     pub window: web_sys::Window,
     canvas: Rc<RefCell<backend::Canvas>>,
     selected_cursor: RefCell<SelectedCursor>,
-    custom_cursors: RefCell<HashMap<u64, String>>,
     destroy_fn: Option<Box<dyn FnOnce()>>,
 }
 
@@ -69,7 +67,6 @@ impl Window {
             window: window.clone(),
             canvas,
             selected_cursor: Default::default(),
-            custom_cursors: Default::default(),
             destroy_fn: Some(destroy_fn),
         };
 
@@ -221,63 +218,14 @@ impl Inner {
     }
 
     #[inline]
-    pub fn register_custom_cursor_icon(&self, key: u64, image: CursorImage) {
-        let cursor_icon_canvas = self
-            .canvas
-            .borrow()
-            .document()
-            .create_element("canvas")
-            .unwrap()
-            .dyn_into::<HtmlCanvasElement>()
-            .unwrap();
-
-        #[allow(clippy::disallowed_methods)]
-        cursor_icon_canvas.set_width(image.width);
-        #[allow(clippy::disallowed_methods)]
-        cursor_icon_canvas.set_height(image.height);
-
-        let context = cursor_icon_canvas
-            .get_context("2d")
-            .unwrap()
-            .unwrap()
-            .dyn_into::<CanvasRenderingContext2d>()
-            .unwrap();
-
-        let image_data = web_sys::ImageData::new_with_u8_clamped_array_and_sh(
-            Clamped(&image.rgba),
-            image.width,
-            image.height,
-        );
-
-        context
-            .put_image_data(&image_data.unwrap(), 0.0, 0.0)
-            .unwrap();
-
-        let data_url = cursor_icon_canvas.to_data_url().unwrap();
-
-        let pointer = format!(
-            "url({data_url}) {} {}, auto",
-            image.hotspot_x, image.hotspot_y,
-        );
-        self.custom_cursors.borrow_mut().insert(key, pointer);
-        let selected = *self.selected_cursor.borrow();
-        if let SelectedCursor::Custom(key) = selected {
-            self.set_custom_cursor_icon(key);
-        }
-    }
-
-    #[inline]
-    pub fn set_custom_cursor_icon(&self, key: u64) {
-        let Some(pointer) = self.custom_cursors.borrow().get(&key).cloned() else {
-            return;
-        };
-        *self.selected_cursor.borrow_mut() = SelectedCursor::Custom(key);
+    pub fn set_custom_cursor(&self, cursor: WebCustomCursor) {
+        *self.selected_cursor.borrow_mut() = SelectedCursor::Custom(cursor.clone());
         if let Some(s) = backend::get_canvas_style_property(self.canvas.borrow().raw(), "cursor") {
             if s == "none" {
                 return;
             }
         }
-        backend::set_canvas_style_property(self.canvas.borrow().raw(), "cursor", &pointer);
+        backend::set_canvas_style_property(self.canvas.borrow().raw(), "cursor", &cursor.inner);
     }
 
     #[inline]
@@ -306,16 +254,10 @@ impl Inner {
         if !visible {
             backend::set_canvas_style_property(self.canvas.borrow().raw(), "cursor", "none");
         } else {
-            let custom_cursors = self.custom_cursors.borrow();
-            let name = match *self.selected_cursor.borrow() {
+            let cursor = self.selected_cursor.borrow();
+            let name = match &*cursor {
                 SelectedCursor::BuiltIn(cursor) => cursor.name(),
-                SelectedCursor::Custom(key) => {
-                    if let Some(data) = custom_cursors.get(&key) {
-                        data
-                    } else {
-                        CursorIcon::default().name()
-                    }
-                }
+                SelectedCursor::Custom(cursor) => &cursor.inner,
             };
             backend::set_canvas_style_property(self.canvas.borrow().raw(), "cursor", name);
         }

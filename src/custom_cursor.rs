@@ -122,6 +122,7 @@ impl CustomCursor {
 #[derive(Debug, Clone)]
 pub(crate) struct NoCustomCursor;
 
+#[allow(dead_code)]
 impl NoCustomCursor {
     pub fn from_rgba(
         rgba: Vec<u8>,
