@@ -4,7 +4,9 @@ use windows_sys::{
     core::PCWSTR,
     Win32::{
         Foundation::HWND,
-        Graphics::Gdi::{CreateBitmap, CreateCompatibleBitmap, GetDC, ReleaseDC, SetBitmapBits},
+        Graphics::Gdi::{
+            CreateBitmap, CreateCompatibleBitmap, DeleteObject, GetDC, ReleaseDC, SetBitmapBits,
+        },
         UI::WindowsAndMessaging::{
             CreateIcon, CreateIconIndirect, DestroyIcon, LoadImageW, SendMessageW, HICON, ICONINFO,
             ICON_BIG, ICON_SMALL, IMAGE_ICON, LR_DEFAULTSIZE, LR_LOADFROMFILE, WM_SETICON,
@@ -12,8 +14,8 @@ use windows_sys::{
     },
 };
 
-use crate::icon::*;
-use crate::{cursor_image::CursorImage, dpi::PhysicalSize};
+use crate::dpi::PhysicalSize;
+use crate::{custom_cursor::BadCursor, icon::*};
 
 use super::util;
 
@@ -137,66 +139,10 @@ impl WinIcon {
         }
     }
 
-    pub(crate) fn from_handle(handle: HICON) -> Self {
+    fn from_handle(handle: HICON) -> Self {
         Self {
             inner: Arc::new(RaiiIcon { handle }),
         }
-    }
-
-    pub fn new_cursor(mut icon: CursorImage) -> Self {
-        // Swap to bgra
-        icon.rgba
-            .chunks_exact_mut(4)
-            .for_each(|chunk| chunk.swap(0, 2));
-
-        let image = &icon.rgba;
-        let w = icon.width;
-        let h = icon.height;
-        let hot_x = icon.hotspot_x;
-        let hot_y = icon.hotspot_y;
-
-        let handle = unsafe {
-            let mask_bits: Vec<u8> = vec![0xff; (((w + 15) >> 3) * h) as usize];
-            let hbm_mask = CreateBitmap(w as i32, h as i32, 1, 1, mask_bits.as_ptr() as *const _);
-            if hbm_mask == 0 {
-                panic!("Failed to create mask bitmap");
-            }
-
-            let hdc_screen = GetDC(0);
-            if hdc_screen == 0 {
-                panic!("Failed to get screen DC");
-            }
-
-            let hbm_color = CreateCompatibleBitmap(hdc_screen, w as i32, h as i32);
-
-            if hbm_color == 0 {
-                panic!("Failed to create color bitmap");
-            }
-
-            SetBitmapBits(
-                hbm_color,
-                image.len() as u32,
-                image.as_ptr() as *const c_void,
-            );
-
-            ReleaseDC(0, hdc_screen);
-
-            let icon_info = ICONINFO {
-                fIcon: 0,
-                xHotspot: hot_x,
-                yHotspot: hot_y,
-                hbmMask: hbm_mask,
-                hbmColor: hbm_color,
-            };
-
-            CreateIconIndirect(&icon_info as *const _)
-        };
-
-        if handle == 0 {
-            panic!("Failed to create icon");
-        }
-
-        WinIcon::from_handle(handle)
     }
 }
 
@@ -215,5 +161,80 @@ impl fmt::Debug for WinIcon {
 pub fn unset_for_window(hwnd: HWND, icon_type: IconType) {
     unsafe {
         SendMessageW(hwnd, WM_SETICON, icon_type as usize, 0);
+    }
+}
+
+#[derive(Debug, Clone)]
+pub struct WinCustomCursor {
+    inner: Arc<RaiiIcon>,
+}
+
+impl WinCustomCursor {
+    pub fn as_raw_handle(&self) -> HICON {
+        self.inner.handle
+    }
+
+    pub fn from_rgba(
+        mut rgba: Vec<u8>,
+        width: u32,
+        height: u32,
+        hotspot_x: u32,
+        hotspot_y: u32,
+    ) -> Result<Self, BadCursor> {
+        // Swap to bgra
+        rgba.chunks_exact_mut(4).for_each(|chunk| chunk.swap(0, 2));
+
+        let handle = unsafe {
+            let mask_bits: Vec<u8> = vec![0xff; (((width + 15) >> 3) * height) as usize];
+            let hbm_mask = CreateBitmap(
+                width as i32,
+                height as i32,
+                1,
+                1,
+                mask_bits.as_ptr() as *const _,
+            );
+            if hbm_mask == 0 {
+                return Err(BadCursor::OsError(io::Error::last_os_error()));
+            }
+
+            let hdc_screen = GetDC(0);
+            if hdc_screen == 0 {
+                return Err(BadCursor::OsError(io::Error::last_os_error()));
+            }
+
+            let hbm_color = CreateCompatibleBitmap(hdc_screen, width as i32, height as i32);
+
+            if hbm_color == 0 {
+                DeleteObject(hbm_mask);
+                ReleaseDC(0, hdc_screen);
+                return Err(BadCursor::OsError(io::Error::last_os_error()));
+            }
+
+            SetBitmapBits(hbm_color, rgba.len() as u32, rgba.as_ptr() as *const c_void);
+
+            ReleaseDC(0, hdc_screen);
+
+            let icon_info = ICONINFO {
+                fIcon: 0,
+                xHotspot: hotspot_x,
+                yHotspot: hotspot_y,
+                hbmMask: hbm_mask,
+                hbmColor: hbm_color,
+            };
+
+            CreateIconIndirect(&icon_info as *const _)
+        };
+
+        if handle == 0 {
+            return Err(BadCursor::OsError(io::Error::last_os_error()));
+        }
+
+        Ok(Self::from_handle(handle))
+    }
+
+    fn from_handle(handle: HICON) -> Self {
+        Self {
+            inner: Arc::new(RaiiIcon { handle }),
+        }
     }
 }

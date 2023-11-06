@@ -10,11 +10,12 @@ pub(crate) use self::{
     event_loop::{
         EventLoop, EventLoopProxy, EventLoopWindowTarget, PlatformSpecificEventLoopAttributes,
     },
-    icon::WinIcon,
+    icon::{WinCustomCursor, WinIcon},
     monitor::{MonitorHandle, VideoMode},
     window::Window,
 };
 
+pub use self::icon::WinCustomCursor as PlatformCustomCursor;
 pub use self::icon::WinIcon as PlatformIcon;
 use crate::platform_impl::Fullscreen;
 

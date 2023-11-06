@@ -55,7 +55,6 @@ use windows_sys::Win32::{
 };
 
 use crate::{
-    cursor_image::CursorImage,
     dpi::{PhysicalPosition, PhysicalSize, Position, Size},
     error::{ExternalError, NotSupportedError, OsError as RootOsError},
     icon::Icon,
@@ -81,10 +80,7 @@ use crate::{
     },
 };
 
-use super::{
-    window_state::{MouseProperties, SelectedCursor},
-    WinIcon,
-};
+use super::{window_state::SelectedCursor, WinCustomCursor};
 
 /// The Win32 implementation of the main `Window` object.
 pub(crate) struct Window {
@@ -410,30 +406,9 @@ impl Window {
     }
 
     #[inline]
-    pub fn register_custom_cursor_icon(&self, key: u64, icon: CursorImage) {
-        let cursor = WinIcon::new_cursor(icon);
-        let mut state = self.window_state_lock();
-        state.mouse.custom_cursors.insert(key, cursor);
-        let selected = state.mouse.selected_cursor;
-        drop(state);
-        if selected == SelectedCursor::Custom(key) {
-            self.set_custom_cursor_icon(key);
-        }
-    }
-
-    #[inline]
-    pub fn set_custom_cursor_icon(&self, key: u64) {
-        let mut state = self.window_state_lock();
-        let MouseProperties {
-            custom_cursors,
-            selected_cursor: cursor,
-            ..
-        } = &mut state.mouse;
-        let Some(new_cursor) = custom_cursors.get(&key) else {
-            return;
-        };
-        *cursor = SelectedCursor::Custom(key);
-        let handle = new_cursor.as_raw_handle();
+    pub fn set_custom_cursor(&self, cursor: WinCustomCursor) {
+        let handle = cursor.as_raw_handle();
+        self.window_state_lock().mouse.selected_cursor = SelectedCursor::Custom(cursor);
         self.thread_executor.execute_in_thread(move || unsafe {
             SetCursor(handle);
         });

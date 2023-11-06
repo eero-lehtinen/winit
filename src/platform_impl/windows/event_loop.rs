@@ -2014,18 +2014,11 @@ unsafe fn public_window_callback_inner<T: 'static>(
                 // No cursor
                 result = ProcResult::DefWindowProc(wparam);
             } else {
-                let cursor = match window_state.mouse.selected_cursor {
+                let cursor = match &window_state.mouse.selected_cursor {
                     SelectedCursor::BuiltIn(cursor_icon) => unsafe {
-                        LoadCursorW(0, util::to_windows_cursor(cursor_icon))
+                        LoadCursorW(0, util::to_windows_cursor(*cursor_icon))
                     },
-                    SelectedCursor::Custom(key) => {
-                        if let Some(icon) = window_state.mouse.custom_cursors.get(&key) {
-                            icon.as_raw_handle()
-                        } else {
-                            // Should never happen but we can just set the default cursor
-                            unsafe { LoadCursorW(0, util::to_windows_cursor(Default::default())) }
-                        }
-                    }
+                    SelectedCursor::Custom(cursor) => cursor.as_raw_handle(),
                 };
                 unsafe { SetCursor(cursor) };
                 result = ProcResult::Value(0);
