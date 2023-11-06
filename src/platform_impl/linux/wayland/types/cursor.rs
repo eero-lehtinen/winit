@@ -13,7 +13,16 @@ use wayland_client::{
 };
 
 #[derive(Debug)]
-pub struct CustomCursor {
+pub struct WaylandCustomCursor {
+    pub bgra_bytes: Vec<u8>,
+    pub w: i32,
+    pub h: i32,
+    pub hot_x: i32,
+    pub hot_y: i32,
+}
+
+#[derive(Debug)]
+pub struct CustomCursorData {
     _file: File,
     shm_pool: WlShmPool,
     pub buffer: WlBuffer,
@@ -21,32 +30,25 @@ pub struct CustomCursor {
     pub h: i32,
     pub hot_x: i32,
     pub hot_y: i32,
+    pub original: Arc<WaylandCustomCursor>,
 }
 
-impl CustomCursor {
-    pub fn new(
-        connection: &Connection,
-        shm: &WlShm,
-        bgra_bytes: &[u8],
-        w: i32,
-        h: i32,
-        hot_x: i32,
-        hot_y: i32,
-    ) -> Self {
+impl CustomCursorData {
+    pub fn new(connection: &Connection, shm: &WlShm, cursor: Arc<WaylandCustomCursor>) -> Self {
         let mfd = memfd::MemfdOptions::default()
             .close_on_exec(true)
             .create("winit-custom-cursor")
             .unwrap();
         let mut file = mfd.into_file();
-        file.set_len(bgra_bytes.len() as u64).unwrap();
-        file.write_all(bgra_bytes).unwrap();
+        file.set_len(cursor.bgra_bytes.len() as u64).unwrap();
+        file.write_all(&cursor.bgra_bytes).unwrap();
         file.flush().unwrap();
 
         let pool_id = connection
             .send_request(
                 shm,
                 wl_shm::Request::CreatePool {
-                    size: bgra_bytes.len() as i32,
+                    size: cursor.bgra_bytes.len() as i32,
                     fd: file.as_fd(),
                 },
                 Some(Arc::new(IgnoreObjectData)),
@@ -59,9 +61,9 @@ impl CustomCursor {
                 &shm_pool,
                 wl_shm_pool::Request::CreateBuffer {
                     offset: 0,
-                    width: w,
-                    height: h,
-                    stride: (w * 4),
+                    width: cursor.w,
+                    height: cursor.h,
+                    stride: cursor.w * 4,
                     format: WEnum::Value(Format::Argb8888),
                 },
                 Some(Arc::new(IgnoreObjectData)),
@@ -69,18 +71,20 @@ impl CustomCursor {
             .unwrap();
         let buffer = WlBuffer::from_id(connection, buffer_id).unwrap();
 
-        CustomCursor {
+        CustomCursorData {
             _file: file,
             shm_pool,
             buffer,
-            w,
-            h,
-            hot_x,
-            hot_y,
+            w: cursor.w,
+            h: cursor.h,
+            hot_x: cursor.hot_x,
+            hot_y: cursor.hot_y,
+            original: cursor,
         }
     }
 
     pub fn destroy(&self, connection: &Connection) {
+        // I guess this should be called only after we get wl_buffer.release, but I don't know how
         connection
             .send_request(&self.buffer, wl_buffer::Request::Destroy, None)
             .unwrap();
@@ -90,10 +94,10 @@ impl CustomCursor {
     }
 }
 
-#[derive(Debug, Clone, Copy, Eq, PartialEq)]
+#[derive(Debug)]
 pub enum SelectedCursor {
     BuiltIn(CursorIcon),
-    Custom(u64),
+    Custom(CustomCursorData),
 }
 
 impl Default for SelectedCursor {

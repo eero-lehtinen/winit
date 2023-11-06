@@ -10,12 +10,7 @@ use std::{
 
 use crate::window::CursorIcon;
 
-use super::{
-    atoms::Atoms,
-    ffi,
-    monitor::MonitorHandle,
-    util::{CustomCursor, SelectedCursor},
-};
+use super::{atoms::Atoms, ffi, monitor::MonitorHandle};
 use x11rb::{connection::Connection, protocol::xproto, resource_manager, xcb_ffi::XCBConnection};
 
 /// A connection to an X server.
@@ -53,9 +48,8 @@ pub(crate) struct XConnection {
     database: resource_manager::Database,
 
     pub latest_error: Mutex<Option<XError>>,
+
     pub cursor_cache: Mutex<HashMap<Option<CursorIcon>, ffi::Cursor>>,
-    pub selected_cursor: Mutex<SelectedCursor>,
-    pub custom_cursors: Mutex<HashMap<u64, CustomCursor>>,
 }
 
 unsafe impl Send for XConnection {}
@@ -124,8 +118,6 @@ impl XConnection {
             monitor_handles: Mutex::new(None),
             database,
             cursor_cache: Default::default(),
-            selected_cursor: Default::default(),
-            custom_cursors: Default::default(),
         })
     }
 

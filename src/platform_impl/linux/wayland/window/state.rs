@@ -5,7 +5,6 @@ use std::num::NonZeroU32;
 use std::sync::{Arc, Weak};
 use std::time::Duration;
 
-use ahash::AHashMap;
 use log::{info, warn};
 
 use sctk::reexports::client::protocol::wl_seat::WlSeat;
@@ -20,7 +19,7 @@ use sctk::reexports::protocols::wp::text_input::zv3::client::zwp_text_input_v3::
 use sctk::reexports::protocols::wp::viewporter::client::wp_viewport::WpViewport;
 use sctk::reexports::protocols::xdg::shell::client::xdg_toplevel::ResizeEdge as XdgResizeEdge;
 
-use sctk::compositor::{CompositorState, Region};
+use sctk::compositor::{CompositorState, Region, SurfaceData, SurfaceDataExt};
 use sctk::seat::pointer::{PointerDataExt, ThemedPointer};
 use sctk::shell::xdg::window::{DecorationMode, Window, WindowConfigure};
 use sctk::shell::xdg::XdgSurface;
@@ -29,14 +28,13 @@ use sctk::shm::Shm;
 use sctk::subcompositor::SubcompositorState;
 use wayland_protocols_plasma::blur::client::org_kde_kwin_blur::OrgKdeKwinBlur;
 
-use crate::cursor_image::CursorImage;
 use crate::dpi::{LogicalPosition, LogicalSize, PhysicalSize, Size};
 use crate::error::{ExternalError, NotSupportedError};
 use crate::event::WindowEvent;
 use crate::platform_impl::wayland::event_loop::sink::EventSink;
-use crate::platform_impl::wayland::make_wid;
-use crate::platform_impl::wayland::types::cursor::{CustomCursor, SelectedCursor};
+use crate::platform_impl::wayland::types::cursor::{CustomCursorData, SelectedCursor};
 use crate::platform_impl::wayland::types::kwin_blur::KWinBlurManager;
+use crate::platform_impl::wayland::{make_wid, WaylandCustomCursor};
 use crate::platform_impl::WindowId;
 use crate::window::{CursorGrabMode, CursorIcon, ImePurpose, ResizeDirection, Theme};
 
@@ -74,8 +72,6 @@ pub struct WindowState {
     pub pointers: Vec<Weak<ThemedPointer<WinitPointerData>>>,
 
     selected_cursor: SelectedCursor,
-
-    pub custom_cursors: AHashMap<u64, Arc<CustomCursor>>,
 
     /// Wether the cursor is visible.
     pub cursor_visible: bool,
@@ -185,7 +181,6 @@ impl WindowState {
             cursor_grab_mode: GrabState::new(),
             cursor_visible: true,
             selected_cursor: Default::default(),
-            custom_cursors: Default::default(),
             decorate: true,
             fractional_scale,
             frame: None,
@@ -216,7 +211,7 @@ impl WindowState {
     }
 
     /// Apply closure on the given pointer.
-    fn apply_on_poiner<F: Fn(&ThemedPointer<WinitPointerData>, &WinitPointerData)>(
+    fn apply_on_pointer<F: Fn(&ThemedPointer<WinitPointerData>, &WinitPointerData)>(
         &self,
         callback: F,
     ) {
@@ -398,7 +393,7 @@ impl WindowState {
         let xdg_toplevel = self.window.xdg_toplevel();
 
         // TODO(kchibisov) handle touch serials.
-        self.apply_on_poiner(|_, data| {
+        self.apply_on_pointer(|_, data| {
             let serial = data.latest_button_serial();
             let seat = data.seat();
             xdg_toplevel.resize(seat, serial, direction.into());
@@ -411,7 +406,7 @@ impl WindowState {
     pub fn drag_window(&self) -> Result<(), ExternalError> {
         let xdg_toplevel = self.window.xdg_toplevel();
         // TODO(kchibisov) handle touch serials.
-        self.apply_on_poiner(|_, data| {
+        self.apply_on_pointer(|_, data| {
             let serial = data.latest_button_serial();
             let seat = data.seat();
             xdg_toplevel._move(seat, serial);
@@ -608,7 +603,7 @@ impl WindowState {
         if self.cursor_visible {
             match &self.selected_cursor {
                 SelectedCursor::BuiltIn(icon) => self.set_cursor(*icon),
-                SelectedCursor::Custom(cursor) => self.set_custom_cursor(*cursor),
+                SelectedCursor::Custom(_) => self.apply_current_custom_cursor(),
             }
         } else {
             self.set_cursor_visible(self.cursor_visible);
@@ -704,64 +699,29 @@ impl WindowState {
             return;
         }
 
-        self.apply_on_poiner(|pointer, _| {
+        self.apply_on_pointer(|pointer, _| {
             if pointer.set_cursor(&self.connection, cursor_icon).is_err() {
                 warn!("Failed to set cursor to {:?}", cursor_icon);
             }
         })
     }
 
-    pub fn register_custom_cursor_icon(&mut self, key: u64, mut image: CursorImage) {
-        // Swap to bgra
-        image
-            .rgba
-            .chunks_exact_mut(4)
-            .for_each(|chunk| chunk.swap(0, 2));
-
-        let new_cursor = CustomCursor::new(
-            &self.connection,
-            &self.shm,
-            &image.rgba,
-            image.width as i32,
-            image.height as i32,
-            image.hotspot_x as i32,
-            image.hotspot_y as i32,
-        );
-
-        if let Some(old_cursor) = self.custom_cursors.remove(&key) {
-            if self.selected_cursor == SelectedCursor::Custom(key) {
-                self.set_custom_cursor(key);
-            }
-            old_cursor.destroy(&self.connection);
-        }
-        self.custom_cursors.insert(key, Arc::new(new_cursor));
-    }
-
-    pub fn set_custom_cursor(&mut self, key: u64) {
-        let Some(cursor) = self.custom_cursors.get(&key) else {
+    pub fn apply_current_custom_cursor(&mut self) {
+        let SelectedCursor::Custom(cursor_data) = &self.selected_cursor else {
             return;
         };
-        self.selected_cursor = SelectedCursor::Custom(key);
-
-        if !self.cursor_visible {
-            return;
-        }
-        self.apply_on_poiner(|pointer, _| {
+        self.apply_on_pointer(|pointer, _| {
             let surface = pointer.surface();
 
-            // Scale chould be used to get pixel perfect results, but would require additional images
-            // for larger scales.
-            //
-            // let scale = surface
-            //     .data::<SurfaceData>()
-            //     .unwrap()
-            //     .surface_data()
-            //     .scale_factor();
-            // surface.set_buffer_scale(scale);
+            let scale = surface
+                .data::<SurfaceData>()
+                .unwrap()
+                .surface_data()
+                .scale_factor();
 
-            surface.set_buffer_scale(1);
-            surface.attach(Some(&cursor.buffer), 0, 0);
-            surface.damage_buffer(0, 0, cursor.w, cursor.h);
+            surface.set_buffer_scale(scale);
+            surface.attach(Some(&cursor_data.buffer), 0, 0);
+            surface.damage_buffer(0, 0, cursor_data.w, cursor_data.h);
             surface.commit();
 
             let serial = pointer
@@ -771,10 +731,31 @@ impl WindowState {
                 .unwrap();
 
             // Set the pointer surface to change the pointer.
-            pointer
-                .pointer()
-                .set_cursor(serial, Some(surface), cursor.hot_x, cursor.hot_y);
+            pointer.pointer().set_cursor(
+                serial,
+                Some(surface),
+                cursor_data.hot_x,
+                cursor_data.hot_y,
+            );
         })
+    }
+
+    pub fn set_custom_cursor(&mut self, cursor: Arc<WaylandCustomCursor>) {
+        if let SelectedCursor::Custom(old_cursor_data) = &self.selected_cursor {
+            if Arc::ptr_eq(&old_cursor_data.original, &cursor) {
+                return;
+            }
+            old_cursor_data.destroy(&self.connection);
+        }
+
+        let cursor_data = CustomCursorData::new(&self.connection, &self.shm, cursor);
+
+        self.selected_cursor = SelectedCursor::Custom(cursor_data);
+
+        if !self.cursor_visible {
+            return;
+        }
+        self.apply_current_custom_cursor();
     }
 
     /// Set maximum inner window size.
@@ -849,21 +830,21 @@ impl WindowState {
 
         match old_mode {
             CursorGrabMode::None => (),
-            CursorGrabMode::Confined => self.apply_on_poiner(|_, data| {
+            CursorGrabMode::Confined => self.apply_on_pointer(|_, data| {
                 data.unconfine_pointer();
             }),
             CursorGrabMode::Locked => {
-                self.apply_on_poiner(|_, data| data.unlock_pointer());
+                self.apply_on_pointer(|_, data| data.unlock_pointer());
             }
         }
 
         let surface = self.window.wl_surface();
         match mode {
-            CursorGrabMode::Locked => self.apply_on_poiner(|pointer, data| {
+            CursorGrabMode::Locked => self.apply_on_pointer(|pointer, data| {
                 let pointer = pointer.pointer();
                 data.lock_pointer(pointer_constraints, surface, pointer, &self.queue_handle)
             }),
-            CursorGrabMode::Confined => self.apply_on_poiner(|pointer, data| {
+            CursorGrabMode::Confined => self.apply_on_pointer(|pointer, data| {
                 let pointer = pointer.pointer();
                 data.confine_pointer(pointer_constraints, surface, pointer, &self.queue_handle)
             }),
@@ -877,7 +858,7 @@ impl WindowState {
 
     pub fn show_window_menu(&self, position: LogicalPosition<u32>) {
         // TODO(kchibisov) handle touch serials.
-        self.apply_on_poiner(|_, data| {
+        self.apply_on_pointer(|_, data| {
             let serial = data.latest_button_serial();
             let seat = data.seat();
             self.window.show_window_menu(seat, serial, position.into());
@@ -899,7 +880,7 @@ impl WindowState {
             )));
         }
 
-        self.apply_on_poiner(|_, data| {
+        self.apply_on_pointer(|_, data| {
             data.set_locked_cursor_position(position.x, position.y);
         });
 
@@ -913,7 +894,7 @@ impl WindowState {
         if self.cursor_visible {
             match &self.selected_cursor {
                 SelectedCursor::BuiltIn(icon) => self.set_cursor(*icon),
-                SelectedCursor::Custom(key) => self.set_custom_cursor(*key),
+                SelectedCursor::Custom(_) => self.apply_current_custom_cursor(),
             }
         } else {
             for pointer in self.pointers.iter().filter_map(|pointer| pointer.upgrade()) {

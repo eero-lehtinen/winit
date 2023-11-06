@@ -2,7 +2,7 @@
 use std::fmt;
 
 use crate::{
-    cursor_image::CursorImage,
+    custom_cursor::CustomCursor,
     dpi::{PhysicalPosition, PhysicalSize, Position, Size},
     error::{ExternalError, NotSupportedError, OsError},
     event_loop::EventLoopWindowTarget,
@@ -1348,15 +1348,9 @@ impl Window {
     }
 
     #[inline]
-    pub fn register_custom_cursor_icon(&self, key: u64, image: CursorImage) {
+    pub fn set_custom_cursor(&self, cursor: CustomCursor) {
         self.window
-            .maybe_queue_on_main(move |w| w.register_custom_cursor_icon(key, image))
-    }
-
-    #[inline]
-    pub fn set_custom_cursor_icon(&self, key: u64) {
-        self.window
-            .maybe_queue_on_main(move |w| w.set_custom_cursor_icon(key))
+            .maybe_queue_on_main(move |w| w.set_custom_cursor(cursor.inner))
     }
 
     /// Changes the position of the cursor in window coordinates.

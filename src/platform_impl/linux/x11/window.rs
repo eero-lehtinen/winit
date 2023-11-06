@@ -7,8 +7,6 @@ use std::{
     sync::{Arc, Mutex, MutexGuard},
 };
 
-use crate::cursor_image::CursorImage;
-
 use cursor_icon::CursorIcon;
 use x11rb::{
     connection::Connection,
@@ -28,8 +26,8 @@ use crate::{
     event_loop::AsyncRequestSerial,
     platform_impl::{
         x11::{atoms::*, MonitorHandle as X11MonitorHandle, WakeSender, X11Error},
-        Fullscreen, MonitorHandle as PlatformMonitorHandle, OsError, PlatformIcon,
-        PlatformSpecificWindowBuilderAttributes, VideoMode as PlatformVideoMode,
+        Fullscreen, MonitorHandle as PlatformMonitorHandle, OsError, PlatformCustomCursor,
+        PlatformIcon, PlatformSpecificWindowBuilderAttributes, VideoMode as PlatformVideoMode,
     },
     window::{
         CursorGrabMode, ImePurpose, ResizeDirection, Theme, UserAttentionType, WindowAttributes,
@@ -1492,28 +1490,26 @@ impl UnownedWindow {
     }
 
     #[inline]
-    pub fn set_custom_cursor_icon(&self, key: u64) {
-        self.set_cursor(SelectedCursor::Custom(key));
+    pub fn set_custom_cursor(&self, cursor: PlatformCustomCursor) {
+        self.set_cursor(SelectedCursor::Custom(cursor.x11.expect(
+            "x11 cursor should always be set if x11 connection is possible",
+        )));
     }
 
     #[inline]
     pub fn set_cursor(&self, cursor: SelectedCursor) {
-        let old_cursor = replace(&mut *self.selected_cursor.lock().unwrap(), cursor);
+        let old_cursor = replace(&mut *self.selected_cursor.lock().unwrap(), cursor.clone());
         #[allow(clippy::mutex_atomic)]
         if cursor != old_cursor && *self.cursor_visible.lock().unwrap() {
-            match cursor {
+            match &cursor {
                 SelectedCursor::BuiltIn(cursor_icon) => {
-                    self.xconn.set_cursor_icon(self.xwindow, Some(cursor_icon))
+                    self.xconn.set_cursor_icon(self.xwindow, Some(*cursor_icon))
                 }
-                SelectedCursor::Custom(key) => self.xconn.set_custom_cursor_icon(self.xwindow, key),
+                SelectedCursor::Custom(cursor) => {
+                    self.xconn.set_custom_cursor(self.xwindow, cursor)
+                }
             }
         }
-    }
-
-    #[inline]
-    pub fn register_custom_cursor_icon(&self, key: u64, image: CursorImage) {
-        self.xconn
-            .register_custom_cursor_icon(self.xwindow, key, image);
     }
 
     #[inline]
@@ -1602,7 +1598,7 @@ impl UnownedWindow {
             return;
         }
         let cursor = if visible {
-            Some(*self.selected_cursor.lock().unwrap())
+            Some(self.selected_cursor.lock().unwrap().clone())
         } else {
             None
         };
@@ -1613,8 +1609,8 @@ impl UnownedWindow {
             Some(SelectedCursor::BuiltIn(icon)) => {
                 self.xconn.set_cursor_icon(self.xwindow, Some(icon))
             }
-            Some(SelectedCursor::Custom(key)) => {
-                self.xconn.set_custom_cursor_icon(self.xwindow, key)
+            Some(SelectedCursor::Custom(cursor)) => {
+                self.xconn.set_custom_cursor(self.xwindow, &cursor)
             }
         }
     }

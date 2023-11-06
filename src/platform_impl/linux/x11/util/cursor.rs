@@ -1,30 +1,34 @@
 use core::slice;
-use std::ffi::CString;
+use std::{ffi::CString, sync::Arc};
 
 use x11rb::connection::Connection;
 
-use crate::{cursor_image::CursorImage, window::CursorIcon};
+use crate::{
+    platform_impl::{XNotSupported, X11_BACKEND},
+    window::CursorIcon,
+};
 
 use super::*;
 
-#[derive(Debug, Clone, Copy)]
-pub struct CustomCursor(ffi::Cursor);
+#[derive(Debug, PartialEq, Eq)]
+pub struct X11CustomCursor(ffi::Cursor);
 
-impl CustomCursor {
-    unsafe fn new(
-        xcursor: &ffi::Xcursor,
-        display: *mut ffi::Display,
+impl X11CustomCursor {
+    pub fn new(
         bgra_bytes: &[u8],
         w: u32,
         h: u32,
         hot_x: u32,
         hot_y: u32,
-    ) -> Self {
+    ) -> Result<Self, XNotSupported> {
+        let xconn_lock = X11_BACKEND.lock().unwrap();
+        let xconn = (*xconn_lock).clone()?;
+
+        let xcursor = &xconn.xcursor;
+        let display = xconn.display;
+
         unsafe {
             let image = (xcursor.XcursorImageCreate)(w as i32, h as i32);
-            if image.is_null() {
-                panic!("failed to allocate cursor image");
-            }
             (*image).xhot = hot_x;
             (*image).yhot = hot_y;
             (*image).delay = 0;
@@ -39,21 +43,28 @@ impl CustomCursor {
 
             let cursor = (xcursor.XcursorImageLoadCursor)(display, image);
             (xcursor.XcursorImageDestroy)(image);
-            CustomCursor(cursor)
-        }
-    }
-
-    unsafe fn destroy(&self, xlib: &ffi::Xlib, display: *mut ffi::Display) {
-        unsafe {
-            (xlib.XFreeCursor)(display, self.0);
+            Ok(Self(cursor))
         }
     }
 }
 
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+impl Drop for X11CustomCursor {
+    fn drop(&mut self) {
+        let xconn_lock = X11_BACKEND.lock().unwrap();
+        if let Ok(xconn) = &(*xconn_lock) {
+            let xlib = &xconn.xlib;
+            let display = xconn.display;
+            unsafe {
+                (xlib.XFreeCursor)(display, self.0);
+            }
+        }
+    }
+}
+
+#[derive(Debug, Clone)]
 pub enum SelectedCursor {
     BuiltIn(CursorIcon),
-    Custom(u64),
+    Custom(Arc<X11CustomCursor>),
 }
 
 impl Default for SelectedCursor {
@@ -61,6 +72,18 @@ impl Default for SelectedCursor {
         SelectedCursor::BuiltIn(Default::default())
     }
 }
+
+impl PartialEq for SelectedCursor {
+    fn eq(&self, other: &Self) -> bool {
+        match (self, other) {
+            (Self::BuiltIn(a), Self::BuiltIn(b)) => a == b,
+            (Self::Custom(a), Self::Custom(b)) => Arc::ptr_eq(a, b),
+            _ => false,
+        }
+    }
+}
+
+impl Eq for SelectedCursor {}
 
 impl XConnection {
     pub fn set_cursor_icon(&self, window: xproto::Window, cursor_icon: Option<CursorIcon>) {
@@ -75,11 +98,7 @@ impl XConnection {
             .expect("Failed to set cursor");
     }
 
-    pub fn set_custom_cursor_icon(&self, window: xproto::Window, key: u64) {
-        let Some(cursor) = self.custom_cursors.lock().unwrap().get(&key).copied() else {
-            return;
-        };
-
+    pub fn set_custom_cursor(&self, window: xproto::Window, cursor: &X11CustomCursor) {
         self.update_cursor(window, cursor.0)
             .expect("Failed to set cursor");
     }
@@ -113,41 +132,6 @@ impl XConnection {
 
             cursor
         }
-    }
-
-    pub fn register_custom_cursor_icon(
-        &self,
-        window: xproto::Window,
-        key: u64,
-        mut image: CursorImage,
-    ) {
-        // Swap to bgra
-        image
-            .rgba
-            .chunks_exact_mut(4)
-            .for_each(|chunk| chunk.swap(0, 2));
-
-        let new_cursor = unsafe {
-            CustomCursor::new(
-                &self.xcursor,
-                self.display,
-                &image.rgba,
-                image.width,
-                image.height,
-                image.hotspot_x,
-                image.hotspot_y,
-            )
-        };
-        let mut cursors = self.custom_cursors.lock().unwrap();
-        if let Some(old_cursor) = cursors.remove(&key) {
-            if *self.selected_cursor.lock().unwrap() == SelectedCursor::Custom(key) {
-                self.update_cursor(window, new_cursor.0).unwrap();
-            }
-            unsafe {
-                old_cursor.destroy(&self.xlib, self.display);
-            }
-        }
-        cursors.insert(key, new_cursor);
     }
 
     fn get_cursor(&self, cursor: Option<CursorIcon>) -> ffi::Cursor {

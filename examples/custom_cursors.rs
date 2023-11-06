@@ -3,19 +3,19 @@
 #[cfg(not(wasm_platform))]
 use simple_logger::SimpleLogger;
 use winit::{
-    cursor_image::CursorImage,
+    custom_cursor::CustomCursor,
     event::{ElementState, Event, KeyEvent, WindowEvent},
     event_loop::EventLoop,
     keyboard::{KeyCode, PhysicalKey},
     window::WindowBuilder,
 };
 
-fn decode_cursor_image(bytes: &[u8]) -> CursorImage {
+fn decode_cursor_icon(bytes: &[u8]) -> CustomCursor {
     let img = image::load_from_memory(bytes).unwrap().to_rgba8();
     let samples = img.into_flat_samples();
     let (_, w, h) = samples.extents();
     let (w, h) = (w as u32, h as u32);
-    CursorImage::from_rgba(samples.samples, w, h, w / 2, h / 2).unwrap()
+    CustomCursor::from_rgba(samples.samples, w, h, w / 2, h / 2).unwrap()
 }
 
 #[cfg(not(wasm_platform))]
@@ -40,13 +40,14 @@ fn main() -> Result<(), impl std::error::Error> {
     };
     let window = builder.build(&event_loop).unwrap();
 
-    let mut cursor_key = 0;
+    let mut cursor_index = 0;
     let mut cursor_visible = true;
 
-    let icon1 = decode_cursor_image(include_bytes!("data/cross.png"));
-    let icon2 = decode_cursor_image(include_bytes!("data/cross2.png"));
-    window.register_custom_cursor_icon(0, icon1);
-    window.register_custom_cursor_icon(1, icon2);
+    let icons = [
+        include_bytes!("./data/cross.png").as_slice(),
+        include_bytes!("./data/cross2.png").as_slice(),
+    ]
+    .map(decode_cursor_icon);
 
     event_loop.run(move |event, _elwt| match event {
         Event::WindowEvent { event, .. } => match event {
@@ -60,9 +61,9 @@ fn main() -> Result<(), impl std::error::Error> {
                 ..
             } => match code {
                 KeyCode::KeyA => {
-                    log::debug!("Setting cursor to {:?}", cursor_key);
-                    window.set_custom_cursor_icon(cursor_key);
-                    cursor_key = (cursor_key + 1) % 2;
+                    log::debug!("Setting cursor to {:?}", cursor_index);
+                    window.set_custom_cursor(icons[cursor_index].clone());
+                    cursor_index = (cursor_index + 1) % icons.len();
                 }
                 KeyCode::KeyS => {
                     log::debug!("Setting cursor icon to default");

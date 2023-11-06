@@ -12,6 +12,7 @@ use sctk::reexports::client::{self, ConnectError, DispatchError, Proxy};
 pub use crate::platform_impl::platform::{OsError, WindowId};
 pub use event_loop::{EventLoop, EventLoopProxy, EventLoopWindowTarget};
 pub use output::{MonitorHandle, VideoMode};
+pub use types::cursor::WaylandCustomCursor;
 pub use window::Window;
 
 mod event_loop;
