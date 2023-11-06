@@ -10,8 +10,8 @@ use objc2::{class, msg_send};
 use super::app_state::EventWrapper;
 use super::uikit::{UIApplication, UIScreen, UIScreenOverscanCompensation};
 use super::view::{WinitUIWindow, WinitView, WinitViewController};
+use super::PlatformCustomCursor;
 use crate::{
-    cursor_image::CursorImage,
     dpi::{self, LogicalPosition, LogicalSize, PhysicalPosition, PhysicalSize, Position, Size},
     error::{ExternalError, NotSupportedError, OsError as RootOsError},
     event::{Event, WindowEvent},
@@ -178,11 +178,7 @@ impl Inner {
         debug!("`Window::set_cursor_icon` ignored on iOS")
     }
 
-    pub fn register_custom_cursor_icon(&self, _: u64, _: CursorImage) {
-        debug!("`Window::register_custom_cursor_icon` ignored on iOS")
-    }
-
-    pub fn set_custom_cursor_icon(&self, _: u64) {
+    pub fn set_custom_cursor_icon(&self, _cursor: PlatformCustomCursor) {
         debug!("`Window::set_custom_cursor_icon` ignored on iOS")
     }
 

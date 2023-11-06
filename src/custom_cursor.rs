@@ -64,6 +64,40 @@ impl Error for BadCursor {
 
 use crate::{icon::PIXEL_SIZE, platform_impl::PlatformCustomCursor};
 
+fn validate_rgba_cursor(
+    rgba: &[u8],
+    width: u32,
+    height: u32,
+    hotspot_x: u32,
+    hotspot_y: u32,
+) -> Result<(), BadCursor> {
+    if rgba.len() % PIXEL_SIZE != 0 {
+        return Err(BadCursor::ByteCountNotDivisibleBy4 {
+            byte_count: rgba.len(),
+        });
+    }
+    let pixel_count = rgba.len() / PIXEL_SIZE;
+    if pixel_count != (width * height) as usize {
+        return Err(BadCursor::DimensionsVsPixelCount {
+            width,
+            height,
+            width_x_height: (width * height) as usize,
+            pixel_count,
+        });
+    }
+
+    if hotspot_x >= width || hotspot_y >= height {
+        return Err(BadCursor::HotspotOutOfBounds {
+            width,
+            height,
+            hotspot_x,
+            hotspot_y,
+        });
+    }
+
+    Ok(())
+}
+
 #[derive(Debug, Clone)]
 pub struct CustomCursor {
     pub(crate) inner: PlatformCustomCursor,
@@ -77,32 +111,26 @@ impl CustomCursor {
         hotspot_x: u32,
         hotspot_y: u32,
     ) -> Result<Self, BadCursor> {
-        if rgba.len() % PIXEL_SIZE != 0 {
-            return Err(BadCursor::ByteCountNotDivisibleBy4 {
-                byte_count: rgba.len(),
-            });
-        }
-        let pixel_count = rgba.len() / PIXEL_SIZE;
-        if pixel_count != (width * height) as usize {
-            return Err(BadCursor::DimensionsVsPixelCount {
-                width,
-                height,
-                width_x_height: (width * height) as usize,
-                pixel_count,
-            });
-        }
-
-        if hotspot_x >= width || hotspot_y >= height {
-            return Err(BadCursor::HotspotOutOfBounds {
-                width,
-                height,
-                hotspot_x,
-                hotspot_y,
-            });
-        }
+        validate_rgba_cursor(&rgba, width, height, hotspot_x, hotspot_y)?;
 
         Ok(Self {
             inner: PlatformCustomCursor::from_rgba(rgba, width, height, hotspot_x, hotspot_y)?,
         })
+    }
+}
+
+#[derive(Debug, Clone)]
+pub(crate) struct NoCustomCursor;
+
+impl NoCustomCursor {
+    pub fn from_rgba(
+        rgba: Vec<u8>,
+        width: u32,
+        height: u32,
+        hotspot_x: u32,
+        hotspot_y: u32,
+    ) -> Result<Self, BadCursor> {
+        validate_rgba_cursor(&rgba, width, height, hotspot_x, hotspot_y)?;
+        Ok(Self)
     }
 }
