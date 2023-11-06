@@ -838,7 +838,7 @@ impl WinitWindow {
     #[inline]
     pub fn set_custom_cursor(&self, cursor: PlatformCustomCursor) {
         let view = self.view();
-        view.set_cursor_icon(cursor.0);
+        view.set_cursor_icon(cursor.inner);
         self.invalidateCursorRectsForView(&view);
     }
 

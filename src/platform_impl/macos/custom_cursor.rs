@@ -6,7 +6,9 @@ use crate::custom_cursor::BadCursor;
 use super::appkit::{NSBitmapImageRep, NSCursor, NSImage};
 
 #[derive(Debug, Clone)]
-pub struct MacosCustomCursor(pub(crate) Id<NSCursor>);
+pub struct MacosCustomCursor {
+    pub(crate) inner: Id<NSCursor>,
+}
 
 impl MacosCustomCursor {
     pub fn from_rgba(
@@ -27,6 +29,8 @@ impl MacosCustomCursor {
 
         let hotspot = NSPoint::new(hotspot_x as f64, hotspot_y as f64);
 
-        Ok(Self(NSCursor::new(&image, hotspot)))
+        Ok(Self {
+            inner: NSCursor::new(&image, hotspot),
+        })
     }
 }
