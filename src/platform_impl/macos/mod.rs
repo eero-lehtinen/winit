@@ -5,6 +5,7 @@ mod app;
 mod app_delegate;
 mod app_state;
 mod appkit;
+mod custom_cursor;
 mod event;
 mod event_loop;
 mod ffi;
@@ -27,6 +28,7 @@ pub(crate) use self::{
 };
 use crate::event::DeviceId as RootDeviceId;
 
+pub(crate) use self::custom_cursor::MacosCustomCursor as PlatformCustomCursor;
 pub(crate) use self::window::Window;
 pub(crate) use crate::icon::NoIcon as PlatformIcon;
 pub(crate) use crate::platform_impl::Fullscreen;

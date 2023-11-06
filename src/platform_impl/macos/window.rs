@@ -1,6 +1,5 @@
 #![allow(clippy::unnecessary_cast)]
 
-use std::collections::HashMap;
 use std::collections::VecDeque;
 use std::f64;
 use std::ops;
@@ -8,7 +7,6 @@ use std::os::raw::c_void;
 use std::ptr::NonNull;
 use std::sync::{Mutex, MutexGuard};
 
-use crate::cursor_image::CursorImage;
 use crate::{
     dpi::{
         LogicalPosition, LogicalSize, PhysicalPosition, PhysicalSize, Position, Size, Size::Logical,
@@ -42,8 +40,6 @@ use objc2::declare::{Ivar, IvarDrop};
 use objc2::rc::{autoreleasepool, Id};
 use objc2::{declare_class, msg_send, msg_send_id, mutability, sel, ClassType};
 
-use super::appkit::NSBitmapImageRep;
-use super::appkit::NSImage;
 use super::appkit::{
     NSApp, NSAppKitVersion, NSAppearance, NSApplicationPresentationOptions, NSBackingStoreType,
     NSColor, NSCursor, NSFilenamesPboardType, NSRequestUserAttentionType, NSResponder, NSScreen,
@@ -52,6 +48,7 @@ use super::appkit::{
 };
 use super::ffi::CGSMainConnectionID;
 use super::ffi::CGSSetWindowBackgroundBlurRadius;
+use super::PlatformCustomCursor;
 
 pub(crate) struct Window {
     window: MainThreadBound<Id<WinitWindow>>,
@@ -214,18 +211,6 @@ declare_class!(
     }
 );
 
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
-pub enum SelectedCursor {
-    BuiltIn(CursorIcon),
-    Custom(u64),
-}
-
-impl Default for SelectedCursor {
-    fn default() -> Self {
-        SelectedCursor::BuiltIn(Default::default())
-    }
-}
-
 #[derive(Debug, Default)]
 pub struct SharedState {
     pub resizable: bool,
@@ -257,9 +242,6 @@ pub struct SharedState {
     pub(crate) option_as_alt: OptionAsAlt,
 
     decorations: bool,
-
-    custom_cursors: HashMap<u64, Id<NSCursor>>,
-    selected_cursor: SelectedCursor,
 }
 
 impl SharedState {
@@ -854,46 +836,9 @@ impl WinitWindow {
     }
 
     #[inline]
-    pub fn register_custom_cursor_icon(&self, key: u64, cursor_image: CursorImage) {
-        let w = cursor_image.width;
-        let h = cursor_image.height;
-
-        let bitmap = NSBitmapImageRep::init_rgba(w as isize, h as isize);
-        let bitmap_data =
-            unsafe { std::slice::from_raw_parts_mut(bitmap.bitmap_data(), (w * h * 4) as usize) };
-        bitmap_data.copy_from_slice(&cursor_image.rgba);
-
-        let image = NSImage::init_with_size(NSSize::new(w.into(), h.into()));
-        image.add_representation(&bitmap);
-
-        let cursor = NSCursor::new(
-            &image,
-            NSPoint::new(cursor_image.hotspot_x as f64, cursor_image.hotspot_y as f64),
-        );
-
-        let mut state = self.shared_state.lock().unwrap();
-        state.custom_cursors.insert(key, cursor);
-        let selected_cursor = state.selected_cursor;
-        drop(state);
-        if selected_cursor == SelectedCursor::Custom(key) {
-            self.set_custom_cursor_icon(key);
-        }
-    }
-
-    #[inline]
-    pub fn set_custom_cursor_icon(&self, key: u64) {
-        let Some(cursor) = self
-            .shared_state
-            .lock()
-            .unwrap()
-            .custom_cursors
-            .get(&key)
-            .cloned()
-        else {
-            return;
-        };
+    pub fn set_custom_cursor(&self, cursor: PlatformCustomCursor) {
         let view = self.view();
-        view.set_cursor_icon(cursor);
+        view.set_cursor_icon(cursor.0);
         self.invalidateCursorRectsForView(&view);
     }
 
