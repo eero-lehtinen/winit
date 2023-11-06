@@ -2,7 +2,7 @@ use core::fmt;
 use std::{error::Error, io};
 
 #[derive(Debug)]
-/// An error produced when using [`Icon::from_rgba`] with invalid arguments.
+/// An error produced when using [`CustomCursor::from_rgba`] with invalid arguments.
 pub enum BadCursor {
     /// Produced when the length of the `rgba` argument isn't divisible by 4, thus `rgba` can't be
     /// safely interpreted as 32bpp RGBA pixels.
@@ -15,14 +15,14 @@ pub enum BadCursor {
         width_x_height: usize,
         pixel_count: usize,
     },
-    /// Produced when the hotspot is outside the image bounds
+    /// Produced when the hotspot is outside the image bounds.
     HotspotOutOfBounds {
         width: u32,
         height: u32,
         hotspot_x: u32,
         hotspot_y: u32,
     },
-    /// Produced when underlying OS functionality failed to create the icon
+    /// Produced when underlying OS functionality failed to create the image.
     OsError(io::Error),
     /// TODO
     OtherError,
@@ -64,17 +64,12 @@ impl Error for BadCursor {
 
 use crate::{icon::PIXEL_SIZE, platform_impl::PlatformCustomCursor};
 
-/// An icon used for the window titlebar, taskbar, etc.
 #[derive(Debug, Clone)]
 pub struct CustomCursor {
     pub(crate) inner: PlatformCustomCursor,
 }
 
 impl CustomCursor {
-    /// Creates an icon from 32bpp RGBA data.
-    ///
-    /// The length of `rgba` must be divisible by 4, and `width * height` must equal
-    /// `rgba.len() / 4`. Otherwise, this will return a `BadIcon` error.
     pub fn from_rgba(
         rgba: Vec<u8>,
         width: u32,
