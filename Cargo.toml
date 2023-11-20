@@ -173,6 +173,7 @@ version = "0.3.64"
 features = [
     'AbortController',
     'AbortSignal',
+    'Blob',
     'console',
     'CssStyleDeclaration',
     'Document',
@@ -184,6 +185,10 @@ features = [
     'FocusEvent',
     'HtmlCanvasElement',
     'HtmlElement',
+    'ImageBitmap',
+    'ImageBitmapOptions',
+    'ImageBitmapRenderingContext',
+    'ImageData',
     'IntersectionObserver',
     'IntersectionObserverEntry',
     'KeyboardEvent',
@@ -193,6 +198,7 @@ features = [
     'Node',
     'PageTransitionEvent',
     'PointerEvent',
+    'PremultiplyAlpha',
     'ResizeObserver',
     'ResizeObserverBoxOptions',
     'ResizeObserverEntry',
@@ -200,7 +206,8 @@ features = [
     'ResizeObserverSize',
     'VisibilityState',
     'Window',
-    'WheelEvent'
+    'WheelEvent',
+    'Url',
 ]
 
 [target.'cfg(target_family = "wasm")'.dependencies]
@@ -212,7 +219,7 @@ web-time = "0.2"
 
 [target.'cfg(target_family = "wasm")'.dev-dependencies]
 console_log = "1"
-web-sys = { version = "0.3.22", features = ['CanvasRenderingContext2d', 'Url', 'ImageData'] }
+web-sys = { version = "0.3.22", features = ['CanvasRenderingContext2d'] }
 
 [workspace]
 members = [
