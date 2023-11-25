@@ -11,6 +11,12 @@ Unreleased` header.
 
 # Unreleased
 
+- On Windows, macOS, X11, Wayland and Web, implement setting images as cursors. See the `custom_cursors.rs` example.
+  - Add `Window::set_custom_cursor`
+  - Add `CustomCursor`
+  - Add `CustomCursor::from_rgba` to allow creating cursor images from RGBA data.
+  - Add `CustomCursorExtWebSys::from_url` to allow loading cursor images from URLs.
+
 # 0.29.4
 
 - Fix crash when running iOS app on macOS.
